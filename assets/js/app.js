@@ -1,4 +1,8 @@
 const LIST_TYPES = ['daily', 'weekly', 'monthly'];
+const PRIORITY_LABEL = { HIGH: 'High', MODERATE: 'Moderate', LOW: 'Low' };
+const STATUS_LABEL = { unassigned: 'Unassigned', open: 'In progress', done: 'Done', expired: 'Missed' };
+
+let knownUserCount = 0;
 
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, {
@@ -18,27 +22,99 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function formatWhen(dt) {
+  if (!dt) return '';
+  // SQLite datetimes come back as "YYYY-MM-DD HH:MM:SS"; Safari's Date parser wants a "T".
+  const d = new Date(dt.replace(' ', 'T'));
+  if (isNaN(d)) return dt;
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function priorityBadgeHtml(priority) {
+  const label = PRIORITY_LABEL[priority] || priority;
+  return `<span class="priority-badge priority-${(priority || '').toLowerCase()}">${escapeHtml(label)}</span>`;
+}
+
+function populateUserSelects(users) {
+  document.querySelectorAll('.specific-user-select').forEach(select => {
+    select.innerHTML = users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('');
+  });
+}
+
 async function loadTasks() {
   const data = await jsonFetch('api/tasks.php');
+
+  if (data.users.length !== knownUserCount) {
+    knownUserCount = data.users.length;
+    populateUserSelects(data.users);
+  }
+
   LIST_TYPES.forEach(type => {
     const card = document.querySelector(`.list-card[data-list-type="${type}"]`);
     const info = data.tasks[type];
     card.querySelector('[data-period-label]').textContent = info.label;
+
+    const startBtn = card.querySelector('[data-start-btn]');
+    startBtn.textContent = info.started ? 'Re-run start (sweep new tasks)' : `Start ${type}`;
+
+    const hint = card.querySelector('[data-unassigned-hint]');
+    if (info.unassigned_count > 0) {
+      hint.hidden = false;
+      hint.textContent = `${info.unassigned_count} task${info.unassigned_count === 1 ? '' : 's'} waiting to be assigned — click "${startBtn.textContent}".`;
+    } else {
+      hint.hidden = true;
+    }
+
     const listEl = card.querySelector('[data-task-list]');
     listEl.innerHTML = '';
     if (info.items.length === 0) {
-      listEl.innerHTML = '<li class="empty-hint">No tasks yet — add one below.</li>';
+      listEl.innerHTML = '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
     }
     info.items.forEach(task => {
       const li = document.createElement('li');
       li.className = 'task-item' + (task.status === 'done' ? ' done' : '');
+      const meta = [];
+      if (task.window_start || task.window_end) {
+        meta.push(`<span class="task-window">${escapeHtml(formatWhen(task.window_start))}${task.window_end ? ' &rarr; ' + escapeHtml(formatWhen(task.window_end)) : ''}</span>`);
+      }
+      if (task.priority === 'HIGH' && task.status === 'open') {
+        meta.push('<span class="timer-hint">⏱ short timer</span>');
+      } else if (task.time_limit_minutes && task.status === 'open') {
+        meta.push(`<span class="timer-hint">⏱ ${task.time_limit_minutes}m</span>`);
+      }
       li.innerHTML = `
         <input type="checkbox" ${task.status === 'done' ? 'checked' : ''} data-task-id="${task.id}">
-        <span class="task-title">${escapeHtml(task.title)}</span>
+        <span class="task-body">
+          <span class="task-title">${escapeHtml(task.title)}</span>
+          ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
+        </span>
+        ${priorityBadgeHtml(task.priority)}
         <span class="task-points">+${task.points}</span>
         <button class="task-del" data-del-id="${task.id}" title="Delete">&times;</button>
       `;
       listEl.appendChild(li);
+    });
+
+    const boardList = card.querySelector('[data-board-list]');
+    const boardCount = card.querySelector('[data-board-count]');
+    boardCount.textContent = `(${info.board.length})`;
+    boardList.innerHTML = '';
+    if (info.board.length === 0) {
+      boardList.innerHTML = '<li class="empty-hint">No tasks in this period yet.</li>';
+    }
+    info.board.forEach(task => {
+      const li = document.createElement('li');
+      li.className = 'board-task-row';
+      const holder = task.holder_username
+        ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
+        : (task.assigned_type === 'SPECIFIC_USER' ? '<em>locked, not yet assigned</em>' : '<em>unassigned</em>');
+      li.innerHTML = `
+        <span class="status-chip status-${task.status}">${STATUS_LABEL[task.status] || task.status}</span>
+        <span class="task-title">${escapeHtml(task.title)}</span>
+        ${priorityBadgeHtml(task.priority)}
+        <span class="board-holder">${holder}</span>
+      `;
+      boardList.appendChild(li);
     });
   });
 }
@@ -93,22 +169,40 @@ function bindListEvents() {
   document.querySelectorAll('.add-task-form').forEach(form => {
     form.addEventListener('submit', async e => {
       e.preventDefault();
-      const input = form.querySelector('input');
-      const title = input.value.trim();
+      const titleInput = form.querySelector('input[name=title]');
+      const title = titleInput.value.trim();
       if (!title) return;
       const listType = form.closest('.list-card').dataset.listType;
-      input.disabled = true;
+
+      const assignedType = form.querySelector('select[name=assigned_type]').value;
+      const payload = {
+        action: 'add',
+        list_type: listType,
+        title,
+        assigned_type: assignedType,
+        priority: form.querySelector('select[name=priority]').value,
+        time_limit_minutes: form.querySelector('input[name=time_limit_minutes]').value || null,
+        window_start: form.querySelector('input[name=window_start]').value || null,
+        window_end: form.querySelector('input[name=window_end]').value || null,
+      };
+      if (assignedType === 'SPECIFIC_USER') {
+        payload.assigned_user_id = form.querySelector('select[name=assigned_user_id]').value;
+      }
+
+      form.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
       try {
         await jsonFetch('api/tasks.php', {
           method: 'POST',
-          body: JSON.stringify({ action: 'add', list_type: listType, title }),
+          body: JSON.stringify(payload),
         });
-        input.value = '';
+        form.reset();
+        form.querySelector('.specific-user-field').hidden = true;
+        form.querySelector('.time-limit-field').classList.remove('disabled-field');
         await loadTasks();
       } catch (err) {
         alert(err.message);
       } finally {
-        input.disabled = false;
+        form.querySelectorAll('input, select, button').forEach(el => el.disabled = false);
       }
     });
   });
@@ -122,10 +216,26 @@ function bindListEvents() {
           method: 'POST',
           body: JSON.stringify({ action, task_id: taskId }),
         });
-        await Promise.all([loadTasks(), loadLeaderboard()]);
+        await Promise.all([loadTasks(), loadLeaderboard(), loadBanner()]);
       } catch (err) {
         alert(err.message);
       }
+      return;
+    }
+
+    if (e.target.matches('.assigned-type-select')) {
+      const form = e.target.closest('form');
+      form.querySelector('.specific-user-field').hidden = e.target.value !== 'SPECIFIC_USER';
+      return;
+    }
+
+    if (e.target.matches('.priority-select')) {
+      const form = e.target.closest('form');
+      const timeLimitField = form.querySelector('.time-limit-field');
+      const isHigh = e.target.value === 'HIGH';
+      timeLimitField.classList.toggle('disabled-field', isHigh);
+      timeLimitField.querySelector('input').disabled = isHigh;
+      timeLimitField.title = isHigh ? 'HIGH priority tasks always use the short auto-reassign timer instead.' : '';
     }
   });
 
@@ -141,6 +251,26 @@ function bindListEvents() {
         await loadTasks();
       } catch (err) {
         alert(err.message);
+      }
+      return;
+    }
+
+    if (e.target.matches('[data-start-btn]')) {
+      const listType = e.target.closest('.list-card').dataset.listType;
+      e.target.disabled = true;
+      try {
+        const result = await jsonFetch('api/tasks.php', {
+          method: 'POST',
+          body: JSON.stringify({ action: 'start', list_type: listType }),
+        });
+        if (result.started === false) {
+          alert(result.reason || 'Could not start this list.');
+        }
+        await Promise.all([loadTasks(), loadLeaderboard()]);
+      } catch (err) {
+        alert(err.message);
+      } finally {
+        e.target.disabled = false;
       }
     }
   });

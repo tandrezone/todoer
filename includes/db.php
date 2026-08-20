@@ -1,5 +1,5 @@
 <?php
-// Database bootstrap: opens (and initializes on first run) the SQLite file.
+// Database bootstrap: opens (and initializes/migrates on first run) the SQLite file.
 
 function todoer_db(): PDO {
     static $pdo = null;
@@ -12,7 +12,6 @@ function todoer_db(): PDO {
         mkdir($dataDir, 0777, true);
     }
     $dbFile = $dataDir . '/todoer.sqlite';
-    $isNew = !file_exists($dbFile);
 
     $pdo = new PDO('sqlite:' . $dbFile);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -21,6 +20,8 @@ function todoer_db(): PDO {
 
     $schema = file_get_contents(__DIR__ . '/schema.sql');
     $pdo->exec($schema);
+
+    todoer_migrate($pdo);
 
     // Seed the prize pool once.
     $count = (int) $pdo->query('SELECT COUNT(*) FROM prizes')->fetchColumn();
@@ -54,4 +55,82 @@ function todoer_db(): PDO {
     }
 
     return $pdo;
+}
+
+/**
+ * Upgrades a pre-existing database (created before assignment/priority/window support existed)
+ * to the current shape. Safe to call on every boot: each step checks whether it's already been
+ * applied before doing anything, so a brand-new install (which gets the current schema.sql
+ * straight away) is a no-op here.
+ */
+function todoer_migrate(PDO $pdo): void {
+    // `active` has no CHECK constraint riding on it, so a plain ADD COLUMN is safe.
+    $userCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
+    if (!in_array('active', $userCols, true)) {
+        $pdo->exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
+    }
+
+    $taskCols = array_column($pdo->query('PRAGMA table_info(tasks)')->fetchAll(), 'name');
+    if (!in_array('assigned_type', $taskCols, true)) {
+        todoer_migrate_tasks_table($pdo);
+    }
+}
+
+/**
+ * Rebuilds `tasks` onto the new shape (new columns + the relaxed status CHECK that allows
+ * 'unassigned'/'expired'). SQLite can't ALTER a CHECK constraint in place, so this renames the
+ * old table, creates the new one, copies rows across with sensible defaults for columns that
+ * didn't exist before, then drops the renamed original. Every pre-existing task already had an
+ * owner (`user_id`), which under the old model was also its creator and its only possible
+ * assignee -- so those rows map straight onto "already assigned, ANY_USER, MODERATE priority,
+ * no window/timer" and keep whatever `status`/points/history they had.
+ */
+function todoer_migrate_tasks_table(PDO $pdo): void {
+    $pdo->exec('PRAGMA foreign_keys = OFF');
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec('ALTER TABLE tasks RENAME TO tasks_pre_assignment');
+        $pdo->exec(todoer_tasks_table_ddl());
+        $pdo->exec(
+            "INSERT INTO tasks (id, user_id, created_by, list_type, period_key, title, points, status,
+                                window_start, window_end, assigned_type, assigned_user_id, priority,
+                                time_limit_minutes, assigned_at, created_at, completed_at)
+             SELECT id, user_id, user_id, list_type, period_key, title, points, status,
+                    NULL, NULL, 'ANY_USER', NULL, 'MODERATE',
+                    NULL, CASE WHEN status = 'open' THEN created_at ELSE NULL END, created_at, completed_at
+             FROM tasks_pre_assignment"
+        );
+        $pdo->exec('DROP TABLE tasks_pre_assignment');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tasks_user_period ON tasks(user_id, list_type, period_key)');
+        $pdo->exec('CREATE INDEX IF NOT EXISTS idx_tasks_period_status ON tasks(list_type, period_key, status)');
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    } finally {
+        $pdo->exec('PRAGMA foreign_keys = ON');
+    }
+}
+
+/** Keep in sync with the `tasks` table definition in schema.sql -- see the note there. */
+function todoer_tasks_table_ddl(): string {
+    return "CREATE TABLE tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        list_type TEXT NOT NULL CHECK (list_type IN ('daily','weekly','monthly')),
+        period_key TEXT NOT NULL,
+        title TEXT NOT NULL,
+        points INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'unassigned' CHECK (status IN ('unassigned','open','done','expired')),
+        window_start TEXT,
+        window_end TEXT,
+        assigned_type TEXT NOT NULL DEFAULT 'ANY_USER' CHECK (assigned_type IN ('ANY_USER','SPECIFIC_USER')),
+        assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        priority TEXT NOT NULL DEFAULT 'MODERATE' CHECK (priority IN ('HIGH','MODERATE','LOW')),
+        time_limit_minutes INTEGER,
+        assigned_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+    )";
 }

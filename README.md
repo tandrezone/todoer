@@ -34,17 +34,62 @@ this folder — no code changes needed.
 
 ## How the game works
 
-- Each player has their own Daily, Weekly, and Monthly lists. Add a task, check
-  it off when it's done.
-- Points are flat by list: Daily = 1pt, Weekly = 3pts, Monthly = 5pts.
-- The moment a day/week/month has fully elapsed, the app tallies everyone's
-  points for that period, crowns whoever scored highest (ties are broken
-  randomly), and awards them a random, not-yet-used prize from the pool. This
-  check runs automatically whenever anyone loads a page — no cron job needed.
+- Tasks live in a shared pool per Daily/Weekly/Monthly list, not a private
+  per-player list. Anyone can add a task to any list; points are flat by list:
+  Daily = 1pt, Weekly = 3pts, Monthly = 5pts.
+- The moment a day/week/month has fully elapsed (or every task in it is done
+  or missed — see below), the app tallies everyone's points for that period,
+  crowns whoever scored highest (ties are broken randomly), and awards them a
+  random, not-yet-used prize from the pool. This check runs automatically
+  whenever anyone loads a page — no cron job needed.
 - The "Prizes" page shows the full history of who won what and when. A winner
   can mark their own prize as "claimed" once it's been redeemed in real life.
 - The sidebar leaderboard shows Today / This week / This month / All-time
   standings side by side.
+
+## Task assignment, priority & timers
+
+Each task can carry, in addition to its title:
+
+- **Window** (`window_start` → `window_end`): the earliest time it can be done
+  and the latest time it must be finished by.
+- **Assignment**: `ANY_USER` (goes into the shared pool to be distributed) or
+  `SPECIFIC_USER` (locked to one designated player from the moment it's
+  created).
+- **Priority**: `HIGH`, `MODERATE`, or `LOW`. `HIGH` tasks always use a short,
+  fixed completion timer (`TODOER_HIGH_PRIORITY_TIME_LIMIT_MINUTES` in
+  `includes/assignment.php`, 30 minutes by default) instead of whatever
+  per-task timer was set, and that timer restarts fresh for whoever it gets
+  handed to.
+- **Time limit** (minutes): an optional per-task timer that starts counting
+  the moment the task is assigned to its current holder (ignored for `HIGH`
+  tasks, which always use the timer above instead).
+
+**Starting a list.** Newly-added tasks sit as `unassigned` until someone
+clicks the **Start** button on that list (daily/weekly/monthly). Start locks
+every `SPECIFIC_USER` task straight to its designated player, then hands out
+the remaining `ANY_USER` tasks so everyone's open-task count for that period
+stays as even as possible. Starting is safe to click again later — it only
+ever picks up tasks that are still `unassigned` (e.g. ones added after the
+list was already started); it never reshuffles work that's already been
+handed out.
+
+**Missed tasks.** Every page load sweeps for tasks past their deadline (the
+earlier of `window_end` and "assigned + its time limit"). An `ANY_USER` task
+that's overdue is taken from its current holder and handed to a different
+active player (whoever has the lightest load), and if it's `HIGH` priority the
+new holder starts on the same short timer. A locked `SPECIFIC_USER` task has
+nobody else it's allowed to go to, so a missed one is simply marked
+**expired** instead.
+
+**Ending a period early.** If every task in a started period is done or
+expired before the day/week/month is actually over, the period closes and
+awards its prize right away rather than waiting for the clock — the "Daily
+Game: ends when all daily tasks are completed" rule from the spec.
+
+Users can be marked inactive (`users.active = 0`) to exclude them from
+distribution and reassignment — there's no UI for this yet; toggle it directly
+in `data/todoer.sqlite` if someone is sitting a period out.
 
 ## Importing tasks from Google Keep
 
@@ -95,14 +140,15 @@ todoer/
   logout.php
   includes/
     schema.sql         SQLite schema
-    db.php             DB bootstrap + prize seeding
+    db.php             DB bootstrap + prize seeding + old-install migration
     auth.php           register/login/session helpers
     period.php         period keys, auto-close + prize award logic, leaderboards
+    assignment.php      distribution on Start, view ordering, expiration/reassignment sweep
     api_helpers.php     JSON request/response helpers
-    bootstrap.php       wires the above together, runs the period auto-close
+    bootstrap.php       wires the above together, runs the expiration sweep + period auto-close
     keep_import.php     parses Google Takeout Keep .json/.zip exports
   api/
-    tasks.php           list/add/complete/reopen/delete tasks (JSON)
+    tasks.php           list mine/board, add, start, complete/reopen/delete tasks (JSON)
     leaderboard.php      leaderboard data (JSON)
     prizes.php           prize history + claim (JSON)
     import.php           Keep upload parsing (step 1) + bulk task insert (step 2)
@@ -119,8 +165,9 @@ todoer/
 
 - Passwords are hashed with PHP's `password_hash` — fine for a household app,
   not audited for anything more sensitive than that.
-- Task lists are private per player; only totals are visible to others, which
-  keeps the competitive framing without turning it into surveillance.
+- Tasks are a shared pool per period rather than private lists — everyone can
+  see and add to the same daily/weekly/monthly board, and the "Team board"
+  panel on each list shows who currently holds what.
 - Ties for a period split the prize randomly between the tied top scorers
   rather than awarding it to both — easy to change in
   `todoer_close_one_period()` in `includes/period.php` if you'd rather award
