@@ -73,11 +73,17 @@ async function loadTasks() {
     const info = data.tasks[type];
     card.querySelector('[data-period-label]').textContent = info.label;
 
+    // Running locks the card down to just the task list + checkboxes: no adding, no editing,
+    // no team board -- see the .is-running rules in style.css. Stopped (or never started)
+    // shows the full add/assign/options UI instead.
+    card.classList.toggle('is-running', info.running);
+
     const startBtn = card.querySelector('[data-start-btn]');
-    startBtn.textContent = info.started ? 'Re-run start (sweep new tasks)' : `Start ${type}`;
+    startBtn.textContent = info.running ? `Stop ${type}` : `Start ${type}`;
+    startBtn.dataset.running = info.running ? '1' : '0';
 
     const hint = card.querySelector('[data-unassigned-hint]');
-    if (info.unassigned_count > 0) {
+    if (!info.running && info.unassigned_count > 0) {
       hint.hidden = false;
       hint.textContent = `${info.unassigned_count} task${info.unassigned_count === 1 ? '' : 's'} waiting to be assigned — click "${startBtn.textContent}".`;
     } else {
@@ -87,7 +93,9 @@ async function loadTasks() {
     const listEl = card.querySelector('[data-task-list]');
     listEl.innerHTML = '';
     if (info.items.length === 0) {
-      listEl.innerHTML = '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
+      listEl.innerHTML = info.running
+        ? '<li class="empty-hint">Nothing assigned to you for this one.</li>'
+        : '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
     }
     info.items.forEach(task => {
       const li = document.createElement('li');
@@ -295,14 +303,16 @@ function bindListEvents() {
 
     if (e.target.matches('[data-start-btn]')) {
       const listType = e.target.closest('.list-card').dataset.listType;
+      const isRunning = e.target.dataset.running === '1';
+      const action = isRunning ? 'stop' : 'start';
       e.target.disabled = true;
       try {
         const result = await jsonFetch('api/tasks.php', {
           method: 'POST',
-          body: JSON.stringify({ action: 'start', list_type: listType }),
+          body: JSON.stringify({ action, list_type: listType }),
         });
-        if (result.started === false) {
-          alert(result.reason || 'Could not start this list.');
+        if (result.started === false || result.stopped === false) {
+          alert(result.reason || `Could not ${action} this list.`);
         }
         await Promise.all([loadTasks(), loadLeaderboard()]);
       } catch (err) {

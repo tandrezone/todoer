@@ -157,12 +157,19 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
             $load[$targetUserId]++;
         }
 
-        $mark = $pdo->prepare('INSERT OR IGNORE INTO game_starts (list_type, period_key) VALUES (?, ?)');
+        // Marks the period as started AND running=1 -- clicking Start again after a Stop
+        // re-runs this whole distribution (sweeping up anything added while stopped) and flips
+        // running back on.
+        $mark = $pdo->prepare(
+            'INSERT INTO game_starts (list_type, period_key, running) VALUES (?, ?, 1)
+             ON CONFLICT(list_type, period_key) DO UPDATE SET running = 1'
+        );
         $mark->execute([$listType, $periodKey]);
 
         $pdo->commit();
         return [
             'started' => true,
+            'running' => true,
             'locked_assigned' => count($locked),
             'open_assigned' => count($open),
             'active_users' => count($activeUsers),
@@ -174,9 +181,38 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
 }
 
 /**
+ * The Stop half of the Start/Stop toggle: flips a started period back to not-running, without
+ * touching any task's assignment. While stopped, tasks can be added/edited again; while
+ * running, the list view locks down to just marking assigned tasks done (enforced in
+ * api/tasks.php's 'add' action and mirrored in the front-end). No-op if the period was never
+ * started in the first place -- there's nothing to stop.
+ */
+function todoer_stop_game(PDO $pdo, string $listType, ?string $periodKey = null): array {
+    $periodKey = $periodKey ?? todoer_period_key($listType);
+    $stmt = $pdo->prepare(
+        "UPDATE game_starts SET running = 0 WHERE list_type = ? AND period_key = ?"
+    );
+    $stmt->execute([$listType, $periodKey]);
+    if ($stmt->rowCount() === 0) {
+        return ['stopped' => false, 'reason' => 'This list has not been started yet.'];
+    }
+    return ['stopped' => true, 'running' => false];
+}
+
+/** Whether a period's game is currently in the "running" (started, not stopped) state. */
+function todoer_is_game_running(PDO $pdo, string $listType, string $periodKey): bool {
+    $stmt = $pdo->prepare('SELECT running FROM game_starts WHERE list_type = ? AND period_key = ?');
+    $stmt->execute([$listType, $periodKey]);
+    $running = $stmt->fetchColumn();
+    return $running !== false && (int) $running === 1;
+}
+
+/**
  * Assigns a single freshly-created task immediately, for tasks added after the period's game
  * has already been started (rather than leaving them stranded as 'unassigned' until the next
- * manual Start). No-op if the period hasn't been started yet, or the task isn't unassigned.
+ * manual Start). No-op if the period isn't currently running, or the task isn't unassigned.
+ * In normal use, api/tasks.php's 'add' action already refuses to add a task while running, so
+ * this is mostly a defensive backstop.
  */
 function todoer_maybe_assign_new_task(PDO $pdo, int $taskId): void {
     $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ?');
@@ -186,9 +222,7 @@ function todoer_maybe_assign_new_task(PDO $pdo, int $taskId): void {
         return;
     }
 
-    $started = $pdo->prepare('SELECT 1 FROM game_starts WHERE list_type = ? AND period_key = ?');
-    $started->execute([$task['list_type'], $task['period_key']]);
-    if (!$started->fetchColumn()) {
+    if (!todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
         return; // wait for the next explicit Start
     }
 

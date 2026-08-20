@@ -136,6 +136,18 @@ form input[type=text], form input[type=password] {
   border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .start-btn:hover { border-color: var(--accent); color: var(--accent); }
+.list-card.is-running .start-btn { border-color: var(--good); color: var(--good); background: var(--good-bg); }
+.list-card.is-running .start-btn:hover { background: var(--good); color: white; }
+
+/* Running locks a list down to just the task list + checkboxes -- no adding, assigning, or
+   deleting until it's stopped again. */
+.list-card.is-running .add-task-form,
+.list-card.is-running .team-board {
+  display: none;
+}
+.list-card.is-running .task-del {
+  display: none;
+}
 .unassigned-hint { color: var(--warn); background: var(--warn-bg); border: 1px solid #f2d9a3; border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: 0 0 10px; }
 
 .task-list { list-style: none; margin: 0 0 12px; padding: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }

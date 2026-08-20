@@ -29,8 +29,7 @@ if ($method === 'GET') {
         $doneMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'done'));
         $items = array_merge(todoer_sort_tasks_for_view($openMine), $doneMine);
 
-        $started = $pdo->prepare('SELECT 1 FROM game_starts WHERE list_type = ? AND period_key = ?');
-        $started->execute([$listType, $periodKey]);
+        $running = todoer_is_game_running($pdo, $listType, $periodKey);
 
         $unassignedCount = $pdo->prepare(
             "SELECT COUNT(*) FROM tasks WHERE list_type = ? AND period_key = ? AND status = 'unassigned'"
@@ -50,7 +49,8 @@ if ($method === 'GET') {
         $tasks[$listType] = [
             'period_key' => $periodKey,
             'label' => todoer_period_label($listType, $periodKey),
-            'started' => (bool) $started->fetchColumn(),
+            // While running: no adding/editing/deleting -- just this list, checked off as done.
+            'running' => $running,
             'unassigned_count' => (int) $unassignedCount->fetchColumn(),
             'items' => $items,
             'board' => $boardStmt->fetchAll(),
@@ -72,6 +72,9 @@ if ($method === 'POST') {
         }
         if ($title === '') {
             todoer_fail('Task title cannot be empty.');
+        }
+        if (todoer_is_game_running($pdo, $listType, todoer_period_key($listType))) {
+            todoer_fail('This list is running -- stop it before adding tasks.');
         }
 
         $assignedType = ($body['assigned_type'] ?? 'ANY_USER') === 'SPECIFIC_USER' ? 'SPECIFIC_USER' : 'ANY_USER';
@@ -143,6 +146,15 @@ if ($method === 'POST') {
         todoer_respond(array_merge(['ok' => true], $result));
     }
 
+    if ($action === 'stop') {
+        $listType = $body['list_type'] ?? '';
+        if (!in_array($listType, TODOER_LIST_TYPES, true)) {
+            todoer_fail('Invalid list type.');
+        }
+        $result = todoer_stop_game($pdo, $listType);
+        todoer_respond(array_merge(['ok' => true], $result));
+    }
+
     if ($action === 'complete' || $action === 'reopen') {
         $taskId = (int) ($body['task_id'] ?? 0);
         $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?');
@@ -168,8 +180,14 @@ if ($method === 'POST') {
 
     if ($action === 'delete') {
         $taskId = (int) ($body['task_id'] ?? 0);
-        $stmt = $pdo->prepare('DELETE FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
+        $stmt = $pdo->prepare('SELECT list_type, period_key FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
         $stmt->execute([$taskId, $user['id'], $user['id']]);
+        $task = $stmt->fetch();
+        if ($task && todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
+            todoer_fail('This list is running -- stop it before deleting tasks.');
+        }
+        $del = $pdo->prepare('DELETE FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
+        $del->execute([$taskId, $user['id'], $user['id']]);
         todoer_respond(['ok' => true]);
     }
 

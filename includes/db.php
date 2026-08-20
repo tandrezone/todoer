@@ -74,6 +74,13 @@ function todoer_migrate(PDO $pdo): void {
     if (!in_array('assigned_type', $taskCols, true)) {
         todoer_migrate_tasks_table($pdo);
     }
+
+    // `running` has no CHECK constraint either -- plain ADD COLUMN, defaulting existing rows
+    // (periods that were already started under the old one-way "Start" behavior) to running=1.
+    $gameStartCols = array_column($pdo->query('PRAGMA table_info(game_starts)')->fetchAll(), 'name');
+    if (!in_array('running', $gameStartCols, true)) {
+        $pdo->exec('ALTER TABLE game_starts ADD COLUMN running INTEGER NOT NULL DEFAULT 1');
+    }
 }
 
 /**

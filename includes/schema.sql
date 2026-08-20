@@ -61,12 +61,17 @@ CREATE TABLE IF NOT EXISTS task_history (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Marks that the "Start" distribution has already run for a given (list_type, period_key), so
--- starting a period is idempotent -- re-running it only sweeps up tasks added since.
+-- Tracks the Start/Stop state of a given (list_type, period_key)'s game. `running` is the live
+-- toggle the Start/Stop button flips: while running, new tasks can't be added and the list view
+-- is locked down to just marking assigned tasks done; while stopped, tasks can be added/edited
+-- again. The row itself (once created) also means "distribution has run at least once for this
+-- period", so re-clicking Start only sweeps up tasks added since rather than reshuffling
+-- everything.
 CREATE TABLE IF NOT EXISTS game_starts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     list_type TEXT NOT NULL,
     period_key TEXT NOT NULL,
+    running INTEGER NOT NULL DEFAULT 1,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(list_type, period_key)
 );
