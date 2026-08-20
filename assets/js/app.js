@@ -6,6 +6,42 @@ let knownUserCount = 0;
 
 const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
+async function setupPushNotifications() {
+  const button = document.getElementById('enable-push');
+  if (!button || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+  const config = await jsonFetch('api/notifications.php');
+  if (!config.public_key || Notification.permission === 'denied') return;
+  const registration = await navigator.serviceWorker.register('service-worker.js');
+  let subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    button.hidden = false;
+    button.addEventListener('click', async () => {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(config.public_key),
+      });
+      await jsonFetch('api/notifications.php', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'subscribe', subscription }),
+      });
+      button.hidden = true;
+    }, { once: true });
+    return;
+  }
+  await jsonFetch('api/notifications.php', {
+    method: 'POST',
+    body: JSON.stringify({ action: 'subscribe', subscription }),
+  });
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = '='.repeat((4 - value.length % 4) % 4);
+  const raw = atob((value + padding).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map(char => char.charCodeAt(0)));
+}
+
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
@@ -351,5 +387,6 @@ async function refreshAll() {
 }
 
 bindListEvents();
+setupPushNotifications().catch(() => {});
 refreshAll();
 setInterval(refreshAll, 30000);

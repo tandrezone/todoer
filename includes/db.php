@@ -76,6 +76,16 @@ function todoer_migrate(PDO $pdo): void {
             UNIQUE(user_id, event_key)
         )'
     );
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime(\'now\'))
+        )'
+    );
 
     // `active` has no CHECK constraint riding on it, so a plain ADD COLUMN is safe.
     $userCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');

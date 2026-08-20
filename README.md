@@ -28,6 +28,32 @@ join with their own account — that's the "join 2+ persons" part.
 On first run it creates `data/todoer.sqlite` automatically and seeds the 20-prize
 pool. Nothing else to configure.
 
+### Web Push notifications
+
+Web Push is optional and requires HTTPS (localhost is also allowed by browsers). Install the
+server library with Composer:
+
+```
+composer install
+```
+
+Generate a VAPID key pair once with:
+
+```
+php -r "require 'vendor/autoload.php'; print_r(Minishlink\\WebPush\\VAPID::createVapidKeys());"
+```
+
+Set the returned values in the PHP server environment before starting Todoer:
+
+```
+TODOER_VAPID_PUBLIC_KEY=...
+TODOER_VAPID_PRIVATE_KEY=...
+TODOER_VAPID_SUBJECT=mailto:you@example.com
+```
+
+After signing in, each browser/device can choose **Enable notifications**. Existing in-app
+notifications continue to work when Composer or VAPID configuration is unavailable.
+
 To run it permanently in the background instead of a one-off terminal window,
 put it behind any standard PHP web server (Apache/Nginx + php-fpm) pointed at
 this folder — no code changes needed.

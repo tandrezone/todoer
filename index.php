@@ -27,6 +27,7 @@ $jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
     </span>
     <a href="prizes.php">Prizes</a>
     <a href="import.php">Import</a>
+    <button type="button" id="enable-push" class="push-btn" hidden>Enable notifications</button>
     <a href="logout.php">Log out</a>
   </nav>
 </header>
