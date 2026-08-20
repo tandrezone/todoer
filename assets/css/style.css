@@ -326,3 +326,70 @@ form input[type=text], form input[type=password] {
 .cand-source { color: var(--muted); font-size: 12px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cand-list { padding: 5px 6px; border-radius: 6px; border: 1px solid var(--border); }
 #commit-btn { width: auto; padding: 10px 20px; }
+
+/* ---------------------------------------------------------------------------
+   Group: the scope everything else lives inside. The header chip is a
+   persistent reminder of *whose* tasks and leaderboard you're looking at --
+   with more than one group on an install, "which group am I in?" has to be
+   answerable at a glance from any page.
+   --------------------------------------------------------------------------- */
+.group-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-bg); color: var(--accent) !important;
+  border-radius: var(--radius-pill); padding: 4px 12px;
+  font-size: 13px; font-weight: 700; max-width: 200px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.group-chip-icon { font-size: 12px; }
+
+.group-page { max-width: 720px; margin: 0 auto; padding: 24px; }
+.group-page h1 { margin-bottom: 4px; }
+.group-page > .hint { margin-bottom: 20px; }
+.group-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 18px 20px; margin-bottom: 18px;
+}
+.group-card h2 { font-size: 15px; margin: 0 0 12px; }
+.group-card h2 + form, .group-card h2 ~ h2 { margin-top: 18px; }
+
+.group-message {
+  border-radius: var(--radius-lg); padding: 10px 14px; margin-bottom: 16px;
+  font-size: 14px; font-weight: 600; color: var(--good); background: var(--good-bg);
+}
+.group-message.is-error { color: var(--danger); background: var(--danger-bg); }
+
+.member-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.member-row {
+  display: flex; align-items: center; gap: 10px; font-size: 14px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+}
+.member-row .name { font-weight: 600; }
+.member-actions { margin-left: auto; display: flex; gap: 12px; }
+.chip.role-admin { color: var(--accent); background: var(--accent-bg); }
+.chip.role-me { color: var(--muted); background: var(--bg); border: 1px solid var(--border); }
+.link-btn { background: none; border: none; padding: 0; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--accent); }
+.link-btn.danger { color: var(--danger); }
+
+.group-form { margin-bottom: 8px; }
+.group-form input[type=text], .group-form input[type=password] {
+  width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px;
+  font: inherit; font-weight: 400; color: var(--ink); margin-top: 6px;
+}
+.group-form button {
+  border: 1px solid var(--border); background: var(--bg); border-radius: 8px;
+  padding: 8px 14px; font-weight: 700; font-size: 13px; cursor: pointer;
+}
+.group-form button:hover { border-color: var(--accent); color: var(--accent); }
+.group-form .hint { margin: 8px 0 0; }
+
+.invite-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.invite-row code {
+  font-size: 18px; font-weight: 700; letter-spacing: 2px;
+  background: var(--bg); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 14px;
+}
+.danger-btn {
+  border: 1px solid var(--danger); background: none; color: var(--danger);
+  border-radius: 8px; padding: 8px 14px; font-weight: 700; font-size: 13px; cursor: pointer;
+}
+
+.invite-field .optional { font-weight: 400; text-transform: none; color: var(--muted); }

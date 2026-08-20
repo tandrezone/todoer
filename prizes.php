@@ -1,6 +1,7 @@
 <?php
 require_once __DIR__ . '/includes/bootstrap.php';
 $user = todoer_require_login();
+$group = todoer_require_group($GLOBALS['pdo'], (int) $user['id'], $user['username']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -24,14 +25,15 @@ $user = todoer_require_login();
       <span class="dot"></span><?= htmlspecialchars($user['username']) ?>
     </span>
     <a href="index.php">Dashboard</a>
+    <a href="group.php">Group</a>
     <a href="import.php">Import</a>
     <a href="logout.php">Log out</a>
   </nav>
 </header>
 
 <main class="prizes-page">
-  <h1>Prize history</h1>
-  <p class="hint">When a day, week or month ends, whoever scored the most points is crowned winner and wins a random prize from the pool. Ties are broken randomly.</p>
+  <h1>Prize history &mdash; <?= htmlspecialchars($group['name']) ?></h1>
+  <p class="hint">When a day, week or month ends, whoever in <strong><?= htmlspecialchars($group['name']) ?></strong> scored the most points is crowned winner and wins a random prize from the pool. Ties are broken randomly. Each group runs its own competition, so only your group's winners appear here.</p>
   <div id="prize-list" class="prize-list"></div>
 </main>
 

@@ -58,21 +58,55 @@ To run it permanently in the background instead of a one-off terminal window,
 put it behind any standard PHP web server (Apache/Nginx + php-fpm) pointed at
 this folder — no code changes needed.
 
+## Groups: who you play with (and who can't see you)
+
+Everything in Todoer happens inside a **group**. A group is the answer to "whose
+tasks can I see, and who am I competing against":
+
+- Every account belongs to exactly one group. Registering without an invite code
+  creates a personal group with you as its **admin** — you can use the app alone,
+  and nobody else can see any of it.
+- A group **admin** can add people: either an existing Todoer account (by
+  username) or a brand-new account they create on the spot for someone who
+  doesn't have one. Admins can also remove members, promote another member to
+  admin, rename the group, and roll its invite code.
+- Anyone can join a group themselves with its **invite code** — on the Join form
+  at sign-up, or from the Group page later. Joining moves you out of your current
+  group, since membership is one group at a time.
+- Inside a group, everyone sees everything: all members' tasks on the team board,
+  the same daily/weekly/monthly lists, the same leaderboard, the same prize
+  history.
+- Outside a group, nothing is visible. A different group on the same install has
+  its own tasks, its own Start/Stop state, its own standings and its own prize
+  draw for the very same day/week/month. Members of one never appear in the
+  other's leaderboard or prize list, can't be assigned its tasks, and don't
+  receive its notifications.
+- Leaving or being removed gives you a fresh personal group. Your account
+  survives; the tasks, points and prizes you earned stay with the group they were
+  earned in, because that's the competition they belonged to.
+
+Scoping is enforced server-side, not in the UI: the group is resolved from your
+session membership on every request (never from anything the client sends), every
+task/leaderboard/prize/award query is filtered by `group_id`, and cross-user
+references (like locking a task to a specific person) are rejected unless that
+person is in your group. See `includes/groups.php`.
+
 ## How the game works
 
-- Tasks live in a shared pool per Daily/Weekly/Monthly list, not a private
-  per-player list. Anyone can add a task to any list; points are flat by list:
-  Daily = 1pt, Weekly = 3pts, Monthly = 5pts.
+- Tasks live in a shared pool per Daily/Weekly/Monthly list *within your group*,
+  not a private per-player list. Any group member can add a task to any of the
+  group's lists; points are flat by list: Daily = 1pt, Weekly = 3pts,
+  Monthly = 5pts.
 - The moment a day/week/month has fully elapsed (or every task in it is done
-  or missed — see below), the app tallies everyone's points for that period,
+  or missed — see below), the app tallies the group's points for that period,
   crowns whoever scored highest (ties are broken randomly), and awards them a
   random, not-yet-used prize from the pool. This check runs automatically
   whenever anyone loads a page — no cron job needed.
-- The "Prizes" page shows the full history of who won what and when. A winner
+- The "Prizes" page shows your group's full history of who won what and when. A winner
   can mark their own prize as "claimed" once it's been redeemed in real life.
 - The sidebar leaderboard shows Today / This week / This month / All-time
   standings side by side.
-- The dashboard shows in-app notifications for everyone when a list starts, for the current holder
+- The dashboard shows in-app notifications for the group when a list starts, for the current holder
   when a task reaches the final 10% of its effective time window, and for everyone when daily results
   are calculated. Notifications are stored, delivered on the next dashboard visit, and sent only once
   per event.
@@ -164,14 +198,16 @@ with a one-off `php -r` script using PDO.
 ```
 todoer/
   index.php            dashboard: lists + leaderboard
-  login.php            sign in / join
+  login.php            sign in / join (optionally with a group invite code)
+  group.php            group page: members, add/remove, invite code, join/leave
   prizes.php           prize history + claim button
   import.php           Google Keep import page
   logout.php
   includes/
     schema.sql         SQLite schema
-    db.php             DB bootstrap + prize seeding + old-install migration
+    db.php             DB bootstrap + prize seeding + old-install migration (incl. groups)
     auth.php           register/login/session helpers
+    groups.php         group membership, admin actions, invite codes — the privacy boundary
     period.php         period keys, auto-close + prize award logic, leaderboards
     assignment.php      distribution on Start, view ordering, expiration/reassignment sweep
     api_helpers.php     JSON request/response helpers
@@ -181,10 +217,12 @@ todoer/
     tasks.php           list mine/board, add, start, complete/reopen/delete tasks (JSON)
     leaderboard.php      leaderboard data (JSON)
     prizes.php           prize history + claim (JSON)
+    group.php            group members + admin actions (JSON)
     import.php           Keep upload parsing (step 1) + bulk task insert (step 2)
   assets/
     css/style.css
     js/app.js            dashboard behaviour
+    js/group.js           group page behaviour
     js/prizes.js          prizes page behaviour
     js/import.js          Keep import scan/preview/commit flow
   data/
@@ -195,9 +233,14 @@ todoer/
 
 - Passwords are hashed with PHP's `password_hash` — fine for a household app,
   not audited for anything more sensitive than that.
-- Tasks are a shared pool per period rather than private lists — everyone can
-  see and add to the same daily/weekly/monthly board, and the "Team board"
-  panel on each list shows who currently holds what.
+- Tasks are a shared pool per period rather than private lists — everyone *in
+  your group* can see and add to the same daily/weekly/monthly board, and the
+  "Team board" panel on each list shows who currently holds what.
+- Upgrading a database that predates groups folds the whole install into a single
+  group named "Our group" (the first registered user becomes its admin), which
+  keeps every existing task, score and prize exactly where it was. The prize
+  *pool* stays shared install-wide, but "already won" is tracked per group, so a
+  new group still has the full list of prizes to work through.
 - Ties for a period split the prize randomly between the tied top scorers
   rather than awarding it to both — easy to change in
   `todoer_close_one_period()` in `includes/period.php` if you'd rather award

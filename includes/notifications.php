@@ -81,8 +81,15 @@ function todoer_remove_push_subscription(PDO $pdo, int $userId, string $endpoint
     $stmt->execute([$userId, $endpoint]);
 }
 
-function todoer_notify_all(PDO $pdo, string $eventKey, string $title, string $body): void {
-    $users = $pdo->query('SELECT id FROM users')->fetchAll();
+/**
+ * Announce something to one group's members only (never install-wide) -- a group's game
+ * starting is nobody else's business, and a stray notification would leak both the group's
+ * existence and its activity.
+ */
+function todoer_notify_group(PDO $pdo, int $groupId, string $eventKey, string $title, string $body): void {
+    $stmt = $pdo->prepare('SELECT user_id AS id FROM group_members WHERE group_id = ?');
+    $stmt->execute([$groupId]);
+    $users = $stmt->fetchAll();
     $stmt = $pdo->prepare(
         'INSERT OR IGNORE INTO notifications (user_id, event_key, title, body) VALUES (?, ?, ?, ?)'
     );

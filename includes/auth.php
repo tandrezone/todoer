@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/groups.php';
 
 if (session_status() === PHP_SESSION_NONE) {
     // Harden the session cookie: HttpOnly so it can't be read/exfiltrated via JavaScript (belt
@@ -31,10 +32,24 @@ function todoer_csrf_token(): string {
     return $_SESSION['csrf_token'];
 }
 
-function todoer_register(string $username, string $password): array {
+/**
+ * Creates an account. Every account lands in exactly one group:
+ *   * with an invite code -> that group, as a member (this is how someone joins friends/family
+ *     who are already playing)
+ *   * without one -> a fresh personal group with this user as its admin. They can add people to
+ *     it, but until they do they're playing alone: their tasks, leaderboard and prize list are
+ *     visible to nobody else, and they appear on nobody else's.
+ * A bad invite code is a hard failure rather than a silent fallback to a personal group -- being
+ * quietly dropped into your own empty group when you meant to join your household is worse than
+ * being told the code was wrong.
+ */
+function todoer_register(string $username, string $password, string $inviteCode = ''): array {
     $username = trim($username);
     if ($username === '' || strlen($password) < 8) {
         return [false, 'Pick a username and a password of at least 8 characters.'];
+    }
+    if (mb_strlen($username) > 40) {
+        return [false, 'Usernames can be at most 40 characters.'];
     }
     $pdo = todoer_db();
     $exists = $pdo->prepare('SELECT id FROM users WHERE username = ?');
@@ -42,15 +57,36 @@ function todoer_register(string $username, string $password): array {
     if ($exists->fetch()) {
         return [false, 'That username is already taken.'];
     }
+
+    $inviteCode = strtoupper(trim($inviteCode));
+    $joinGroupId = null;
+    if ($inviteCode !== '') {
+        $lookup = $pdo->prepare('SELECT id FROM groups WHERE invite_code = ?');
+        $lookup->execute([$inviteCode]);
+        $found = $lookup->fetchColumn();
+        if ($found === false) {
+            return [false, 'That invite code does not match any group.'];
+        }
+        $joinGroupId = (int) $found;
+    }
+
     $count = (int) $pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
     $color = TODOER_COLORS[$count % count(TODOER_COLORS)];
     $stmt = $pdo->prepare('INSERT INTO users (username, password_hash, color) VALUES (?, ?, ?)');
     $stmt->execute([$username, password_hash($password, PASSWORD_DEFAULT), $color]);
+    $userId = (int) $pdo->lastInsertId();
+
+    if ($joinGroupId !== null) {
+        todoer_place_user_in_group($pdo, $userId, $joinGroupId, 'member');
+    } else {
+        todoer_create_group($pdo, $userId, todoer_default_group_name($pdo, $userId, $username));
+    }
+
     // Regenerate the session id on every privilege change (anonymous -> authenticated) so a
     // session id an attacker may have handed the victim before login can't be reused afterward
     // (session fixation).
     session_regenerate_id(true);
-    $_SESSION['user_id'] = (int) $pdo->lastInsertId();
+    $_SESSION['user_id'] = $userId;
     return [true, ''];
 }
 

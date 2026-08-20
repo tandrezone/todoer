@@ -1,6 +1,9 @@
 <?php
 require_once __DIR__ . '/includes/bootstrap.php';
 $user = todoer_require_login();
+// The group is the scope of everything on this page -- naming it in the header is what makes
+// "these are our tasks, and only ours" visible rather than implied.
+$group = todoer_require_group($GLOBALS['pdo'], (int) $user['id'], $user['username']);
 $cssV = @filemtime(__DIR__ . '/assets/css/style.css') ?: time();
 $jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
 ?>
@@ -25,6 +28,9 @@ $jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
     <span class="me" style="--me-color: <?= htmlspecialchars($user['color']) ?>">
       <span class="dot"></span><?= htmlspecialchars($user['username']) ?>
     </span>
+    <a href="group.php" class="group-chip" title="Everyone who shares these lists and competes with you">
+      <span class="group-chip-icon">👥</span><?= htmlspecialchars($group['name']) ?>
+    </a>
     <a href="prizes.php">Prizes</a>
     <a href="import.php">Import</a>
     <button type="button" id="enable-push" class="push-btn" hidden>Enable notifications</button>

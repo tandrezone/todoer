@@ -9,6 +9,8 @@ if (!$user) {
 }
 
 $pdo = $GLOBALS['pdo'];
+$group = todoer_require_group($pdo, (int) $user['id'], $user['username']);
+$groupId = (int) $group['id'];
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     todoer_fail('Method not allowed.', 405);
@@ -33,9 +35,9 @@ if (!$isMultipart) {
     // set explicitly so this insert stays valid against the assignment-feature schema.
     $insert = $pdo->prepare(
         "INSERT INTO tasks
-            (user_id, created_by, list_type, period_key, title, points, status,
+            (group_id, user_id, created_by, list_type, period_key, title, points, status,
              window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes)
-         VALUES (NULL, ?, ?, ?, ?, ?, 'unassigned', NULL, NULL, 'ANY_USER', NULL, 'MODERATE', NULL)"
+         VALUES (?, NULL, ?, ?, ?, ?, ?, 'unassigned', NULL, NULL, 'ANY_USER', NULL, 'MODERATE', NULL)"
     );
 
     $created = 0;
@@ -51,7 +53,7 @@ if (!$isMultipart) {
             $title = mb_substr($title, 0, 200);
             $periodKey = todoer_period_key($listType);
             $points = TODOER_POINTS[$listType];
-            $insert->execute([$user['id'], $listType, $periodKey, $title, $points]);
+            $insert->execute([$groupId, $user['id'], $listType, $periodKey, $title, $points]);
             $createdIds[] = (int) $pdo->lastInsertId();
             $created++;
         }

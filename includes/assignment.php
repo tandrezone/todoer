@@ -4,6 +4,7 @@
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/period.php';
+require_once __DIR__ . '/groups.php';
 
 const TODOER_PRIORITIES = ['HIGH', 'MODERATE', 'LOW'];
 
@@ -15,9 +16,18 @@ const TODOER_HIGH_PRIORITY_TIME_LIMIT_MINUTES = 30;
 
 const TODOER_PRIORITY_RANK = ['HIGH' => 0, 'MODERATE' => 1, 'LOW' => 2];
 
-/** Active (currently playing) users, in a stable order used for tie-breaking. */
-function todoer_active_users(PDO $pdo): array {
-    return $pdo->query('SELECT id, username, color FROM users WHERE active = 1 ORDER BY username')->fetchAll();
+/**
+ * Active (currently playing) members of one group, in a stable order used for tie-breaking.
+ * Distribution and reassignment only ever consider this list, so a task can never land on
+ * somebody outside the group it belongs to.
+ */
+function todoer_active_users(PDO $pdo, int $groupId): array {
+    $stmt = $pdo->prepare(
+        'SELECT u.id, u.username, u.color FROM group_members gm JOIN users u ON u.id = gm.user_id
+         WHERE gm.group_id = ? AND u.active = 1 ORDER BY u.username'
+    );
+    $stmt->execute([$groupId]);
+    return $stmt->fetchAll();
 }
 
 /**
@@ -77,15 +87,15 @@ function todoer_sort_tasks_for_view(array $tasks): array {
     return $tasks;
 }
 
-/** Current open-task load per active user for a period, used to keep distribution balanced. */
-function todoer_open_task_load(PDO $pdo, string $listType, string $periodKey, array $activeUsers): array {
+/** Current open-task load per active member for a group's period, to keep distribution balanced. */
+function todoer_open_task_load(PDO $pdo, int $groupId, string $listType, string $periodKey, array $activeUsers): array {
     $load = array_fill_keys(array_column($activeUsers, 'id'), 0);
     $stmt = $pdo->prepare(
         "SELECT user_id, COUNT(*) AS c FROM tasks
-         WHERE list_type = ? AND period_key = ? AND status = 'open' AND user_id IS NOT NULL
+         WHERE group_id = ? AND list_type = ? AND period_key = ? AND status = 'open' AND user_id IS NOT NULL
          GROUP BY user_id"
     );
-    $stmt->execute([$listType, $periodKey]);
+    $stmt->execute([$groupId, $listType, $periodKey]);
     foreach ($stmt->fetchAll() as $row) {
         if (array_key_exists((int) $row['user_id'], $load)) {
             $load[(int) $row['user_id']] = (int) $row['c'];
@@ -118,21 +128,21 @@ function todoer_log_task_event(PDO $pdo, int $taskId, string $event, ?int $fromU
  * Idempotent: only touches tasks still in 'unassigned' status, so re-running it (e.g. because a
  * task was added mid-period) just sweeps up what's new instead of reshuffling everything.
  */
-function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null): array {
+function todoer_start_game(PDO $pdo, int $groupId, string $listType, ?string $periodKey = null): array {
     $periodKey = $periodKey ?? todoer_period_key($listType);
-    $activeUsers = todoer_active_users($pdo);
+    $activeUsers = todoer_active_users($pdo, $groupId);
     if (!$activeUsers) {
-        return ['started' => false, 'reason' => 'No active users to assign tasks to.'];
+        return ['started' => false, 'reason' => 'No active players in this group to assign tasks to.'];
     }
 
     $pdo->beginTransaction();
     try {
         // 1. Locked tasks first.
         $stmt = $pdo->prepare(
-            "SELECT * FROM tasks WHERE list_type = ? AND period_key = ?
+            "SELECT * FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ?
              AND assigned_type = 'SPECIFIC_USER' AND status = 'unassigned'"
         );
-        $stmt->execute([$listType, $periodKey]);
+        $stmt->execute([$groupId, $listType, $periodKey]);
         $locked = $stmt->fetchAll();
         foreach ($locked as $task) {
             if (empty($task['assigned_user_id'])) {
@@ -143,13 +153,13 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
 
         // 2. Open (ANY_USER) tasks, balanced across active users.
         $stmt = $pdo->prepare(
-            "SELECT * FROM tasks WHERE list_type = ? AND period_key = ?
+            "SELECT * FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ?
              AND assigned_type = 'ANY_USER' AND status = 'unassigned'"
         );
-        $stmt->execute([$listType, $periodKey]);
+        $stmt->execute([$groupId, $listType, $periodKey]);
         $open = todoer_sort_tasks_for_view($stmt->fetchAll());
 
-        $load = todoer_open_task_load($pdo, $listType, $periodKey, $activeUsers);
+        $load = todoer_open_task_load($pdo, $groupId, $listType, $periodKey, $activeUsers);
         foreach ($open as $task) {
             asort($load);
             $targetUserId = array_key_first($load);
@@ -161,14 +171,15 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
         // re-runs this whole distribution (sweeping up anything added while stopped) and flips
         // running back on.
         $mark = $pdo->prepare(
-            'INSERT INTO game_starts (list_type, period_key, running) VALUES (?, ?, 1)
-             ON CONFLICT(list_type, period_key) DO UPDATE SET running = 1'
+            'INSERT INTO game_starts (group_id, list_type, period_key, running) VALUES (?, ?, ?, 1)
+             ON CONFLICT(group_id, list_type, period_key) DO UPDATE SET running = 1'
         );
-        $mark->execute([$listType, $periodKey]);
+        $mark->execute([$groupId, $listType, $periodKey]);
 
-        todoer_notify_all(
+        todoer_notify_group(
             $pdo,
-            'game-started:' . $listType . ':' . $periodKey,
+            $groupId,
+            'game-started:' . $groupId . ':' . $listType . ':' . $periodKey,
             ucfirst($listType) . ' game started',
             'Tasks have been assigned. Good luck!'
         );
@@ -194,12 +205,12 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
  * api/tasks.php's 'add' action and mirrored in the front-end). No-op if the period was never
  * started in the first place -- there's nothing to stop.
  */
-function todoer_stop_game(PDO $pdo, string $listType, ?string $periodKey = null): array {
+function todoer_stop_game(PDO $pdo, int $groupId, string $listType, ?string $periodKey = null): array {
     $periodKey = $periodKey ?? todoer_period_key($listType);
     $stmt = $pdo->prepare(
-        "UPDATE game_starts SET running = 0 WHERE list_type = ? AND period_key = ?"
+        "UPDATE game_starts SET running = 0 WHERE group_id = ? AND list_type = ? AND period_key = ?"
     );
-    $stmt->execute([$listType, $periodKey]);
+    $stmt->execute([$groupId, $listType, $periodKey]);
     if ($stmt->rowCount() === 0) {
         return ['stopped' => false, 'reason' => 'This list has not been started yet.'];
     }
@@ -207,9 +218,9 @@ function todoer_stop_game(PDO $pdo, string $listType, ?string $periodKey = null)
 }
 
 /** Whether a period's game is currently in the "running" (started, not stopped) state. */
-function todoer_is_game_running(PDO $pdo, string $listType, string $periodKey): bool {
-    $stmt = $pdo->prepare('SELECT running FROM game_starts WHERE list_type = ? AND period_key = ?');
-    $stmt->execute([$listType, $periodKey]);
+function todoer_is_game_running(PDO $pdo, int $groupId, string $listType, string $periodKey): bool {
+    $stmt = $pdo->prepare('SELECT running FROM game_starts WHERE group_id = ? AND list_type = ? AND period_key = ?');
+    $stmt->execute([$groupId, $listType, $periodKey]);
     $running = $stmt->fetchColumn();
     return $running !== false && (int) $running === 1;
 }
@@ -229,22 +240,25 @@ function todoer_maybe_assign_new_task(PDO $pdo, int $taskId): void {
         return;
     }
 
-    if (!todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
+    $groupId = (int) $task['group_id'];
+    if (!todoer_is_game_running($pdo, $groupId, $task['list_type'], $task['period_key'])) {
         return; // wait for the next explicit Start
     }
 
     if ($task['assigned_type'] === 'SPECIFIC_USER') {
-        if (!empty($task['assigned_user_id'])) {
+        // Only if the designated person is still in this group -- if they were removed, the task
+        // stays unassigned for the group's admin to re-point rather than following them out.
+        if (!empty($task['assigned_user_id']) && todoer_is_group_member($pdo, $groupId, (int) $task['assigned_user_id'])) {
             todoer_assign_task_to_user($pdo, $taskId, (int) $task['assigned_user_id'], null, 'assigned', 'locked to designated user');
         }
         return;
     }
 
-    $activeUsers = todoer_active_users($pdo);
+    $activeUsers = todoer_active_users($pdo, $groupId);
     if (!$activeUsers) {
         return;
     }
-    $load = todoer_open_task_load($pdo, $task['list_type'], $task['period_key'], $activeUsers);
+    $load = todoer_open_task_load($pdo, $groupId, $task['list_type'], $task['period_key'], $activeUsers);
     asort($load);
     $targetUserId = array_key_first($load);
     todoer_assign_task_to_user($pdo, $taskId, (int) $targetUserId, null, 'assigned', 'distributed on add (period already started)');
@@ -279,17 +293,20 @@ function todoer_process_expirations(PDO $pdo): void {
             continue;
         }
 
-        $activeUsers = todoer_active_users($pdo);
+        // Reassignment candidates come from the task's own group only: a missed task moves
+        // sideways within the group or expires, it never escapes into another group.
+        $groupId = (int) $task['group_id'];
+        $activeUsers = todoer_active_users($pdo, $groupId);
         $candidates = array_values(array_filter(
             $activeUsers,
             fn(array $u): bool => (int) $u['id'] !== (int) $task['user_id']
         ));
         if (!$candidates) {
-            todoer_mark_expired($pdo, $task, 'timed out, no other active user available');
+            todoer_mark_expired($pdo, $task, 'timed out, no other active player in this group');
             continue;
         }
 
-        $load = todoer_open_task_load($pdo, $task['list_type'], $task['period_key'], $candidates);
+        $load = todoer_open_task_load($pdo, $groupId, $task['list_type'], $task['period_key'], $candidates);
         asort($load);
         $newUserId = (int) array_key_first($load);
         todoer_assign_task_to_user($pdo, (int) $task['id'], $newUserId, (int) $task['user_id'], 'reassigned', 'timed out');
@@ -338,34 +355,34 @@ function todoer_process_deadline_notifications(PDO $pdo): void {
  * waiting for the period to elapse on the clock. No-op if the period was never started, has no
  * tasks at all, or is already closed.
  */
-function todoer_maybe_finish_period_early(PDO $pdo, string $listType, ?string $periodKey = null): void {
+function todoer_maybe_finish_period_early(PDO $pdo, int $groupId, string $listType, ?string $periodKey = null): void {
     $periodKey = $periodKey ?? todoer_period_key($listType);
 
-    $started = $pdo->prepare('SELECT 1 FROM game_starts WHERE list_type = ? AND period_key = ?');
-    $started->execute([$listType, $periodKey]);
+    $started = $pdo->prepare('SELECT 1 FROM game_starts WHERE group_id = ? AND list_type = ? AND period_key = ?');
+    $started->execute([$groupId, $listType, $periodKey]);
     if (!$started->fetchColumn()) {
         return;
     }
 
-    $already = $pdo->prepare('SELECT 1 FROM periods_closed WHERE list_type = ? AND period_key = ?');
-    $already->execute([$listType, $periodKey]);
+    $already = $pdo->prepare('SELECT 1 FROM periods_closed WHERE group_id = ? AND list_type = ? AND period_key = ?');
+    $already->execute([$groupId, $listType, $periodKey]);
     if ($already->fetchColumn()) {
         return;
     }
 
     $pending = $pdo->prepare(
-        "SELECT COUNT(*) FROM tasks WHERE list_type = ? AND period_key = ? AND status IN ('unassigned', 'open')"
+        "SELECT COUNT(*) FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ? AND status IN ('unassigned', 'open')"
     );
-    $pending->execute([$listType, $periodKey]);
+    $pending->execute([$groupId, $listType, $periodKey]);
     if ((int) $pending->fetchColumn() > 0) {
         return;
     }
 
-    $total = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE list_type = ? AND period_key = ?');
-    $total->execute([$listType, $periodKey]);
+    $total = $pdo->prepare('SELECT COUNT(*) FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ?');
+    $total->execute([$groupId, $listType, $periodKey]);
     if ((int) $total->fetchColumn() === 0) {
         return; // nothing was ever on the board -- don't crown a winner for an empty game
     }
 
-    todoer_close_one_period($pdo, $listType, $periodKey);
+    todoer_close_one_period($pdo, $groupId, $listType, $periodKey);
 }

@@ -93,6 +93,20 @@ function priorityBadgeHtml(priority) {
   return `<span class="chip priority-badge priority-${(priority || '').toLowerCase()}">${escapeHtml(label)}</span>`;
 }
 
+// Keeps the header chip honest while the page stays open: the group can be renamed, or someone
+// can be added or removed, from another tab or by another member. `users` here is always just
+// this group's members -- the API never returns anyone else.
+function updateGroupChip(group) {
+  if (!group) return;
+  const chip = document.querySelector('.group-chip');
+  if (!chip) return;
+  const icon = chip.querySelector('.group-chip-icon')?.outerHTML || '';
+  chip.innerHTML = icon + escapeHtml(group.name);
+  chip.title = group.member_count === 1
+    ? 'Just you for now — add someone to compete'
+    : `${group.member_count} people share these lists and compete with you`;
+}
+
 function populateUserSelects(users) {
   document.querySelectorAll('.specific-user-select, .edit-specific-user-select').forEach(select => {
     select.innerHTML = users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('');
@@ -102,6 +116,7 @@ function populateUserSelects(users) {
 async function loadTasks() {
   const data = await jsonFetch('api/tasks.php');
   renderNotifications(data.notifications || []);
+  updateGroupChip(data.group);
   taskCache.clear();
 
   if (data.users.length !== knownUserCount) {

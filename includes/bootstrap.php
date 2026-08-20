@@ -24,6 +24,7 @@ set_exception_handler(function (Throwable $e): void {
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/groups.php';
 require_once __DIR__ . '/notifications.php';
 require_once __DIR__ . '/period.php';
 require_once __DIR__ . '/assignment.php';
@@ -33,9 +34,16 @@ $GLOBALS['pdo'] = todoer_db();
 // Execution/expiration/reassignment sweep, then check whether any period finished early
 // (every task done/expired), then the original time-based period close. Order matters: a
 // reassignment or a completion can be what makes a period newly eligible to close.
+//
+// The sweeps run for every group on the install, not just the caller's: they're background
+// bookkeeping (timers, deadlines, prize awards) that has to keep ticking for a group even while
+// none of its members has the app open. They only ever *write* within a single group's own rows,
+// so this is not a read path and leaks nothing between groups.
 todoer_process_expirations($GLOBALS['pdo']);
 todoer_process_deadline_notifications($GLOBALS['pdo']);
-foreach (TODOER_LIST_TYPES as $listType) {
-    todoer_maybe_finish_period_early($GLOBALS['pdo'], $listType);
+foreach (todoer_all_group_ids($GLOBALS['pdo']) as $todoerGroupId) {
+    foreach (TODOER_LIST_TYPES as $listType) {
+        todoer_maybe_finish_period_early($GLOBALS['pdo'], $todoerGroupId, $listType);
+    }
+    todoer_close_elapsed_periods($GLOBALS['pdo'], $todoerGroupId);
 }
-todoer_close_elapsed_periods($GLOBALS['pdo']);

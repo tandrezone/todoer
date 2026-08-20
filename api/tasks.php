@@ -10,8 +10,15 @@ if (!$user) {
 $pdo = $GLOBALS['pdo'];
 $method = $_SERVER['REQUEST_METHOD'];
 
+// Every read and write below is scoped to this one group. It is resolved once, from the session
+// user's membership -- never from anything the client sends -- so there is no request shape that
+// can point this endpoint at another group's tasks.
+$group = todoer_require_group($pdo, (int) $user['id'], $user['username']);
+$groupId = (int) $group['id'];
+
 if ($method === 'GET') {
-    $allUsers = $pdo->query('SELECT id, username, color, active FROM users ORDER BY username')->fetchAll();
+    // Only fellow group members are offered as assignees, and only they appear on the board.
+    $allUsers = todoer_group_members($pdo, $groupId);
 
     $tasks = [];
     foreach (TODOER_LIST_TYPES as $listType) {
@@ -21,30 +28,31 @@ if ($method === 'GET') {
         // user_id yet -- and never 'expired', which only applies to locked tasks nobody can
         // pick back up). Open tasks are ordered per the spec: window_start, then priority;
         // completed tasks stay appended in original done order underneath.
-        $mine = $pdo->prepare("SELECT * FROM tasks WHERE user_id = ? AND list_type = ? AND period_key = ?
+        $mine = $pdo->prepare("SELECT * FROM tasks WHERE group_id = ? AND user_id = ? AND list_type = ? AND period_key = ?
                                 AND status IN ('open', 'done') ORDER BY created_at ASC");
-        $mine->execute([$user['id'], $listType, $periodKey]);
+        $mine->execute([$groupId, $user['id'], $listType, $periodKey]);
         $mineRows = $mine->fetchAll();
         $openMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'open'));
         $doneMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'done'));
         $items = array_merge(todoer_sort_tasks_for_view($openMine), $doneMine);
 
-        $running = todoer_is_game_running($pdo, $listType, $periodKey);
+        $running = todoer_is_game_running($pdo, $groupId, $listType, $periodKey);
 
         $unassignedCount = $pdo->prepare(
-            "SELECT COUNT(*) FROM tasks WHERE list_type = ? AND period_key = ? AND status = 'unassigned'"
+            "SELECT COUNT(*) FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ? AND status = 'unassigned'"
         );
-        $unassignedCount->execute([$listType, $periodKey]);
+        $unassignedCount->execute([$groupId, $listType, $periodKey]);
 
-        // Shared board: every task in this period, so locked/other-people's/expired tasks are
-        // still visible to the whole group even though they won't show up in "My" list above.
+        // Shared board: every task in this period *belonging to this group*, so locked/other
+        // members'/expired tasks are still visible to the whole group even though they won't show
+        // up in "My" list above -- and tasks from any other group never appear at all.
         $boardStmt = $pdo->prepare(
             "SELECT t.*, u.username AS holder_username, u.color AS holder_color
              FROM tasks t LEFT JOIN users u ON u.id = t.user_id
-             WHERE t.list_type = ? AND t.period_key = ?
+             WHERE t.group_id = ? AND t.list_type = ? AND t.period_key = ?
              ORDER BY (t.status = 'done'), t.created_at ASC"
         );
-        $boardStmt->execute([$listType, $periodKey]);
+        $boardStmt->execute([$groupId, $listType, $periodKey]);
 
         $tasks[$listType] = [
             'period_key' => $periodKey,
@@ -65,6 +73,12 @@ if ($method === 'GET') {
         'ok' => true,
         'tasks' => $tasks,
         'users' => $allUsers,
+        'group' => [
+            'id' => $groupId,
+            'name' => $group['name'],
+            'role' => $group['role'],
+            'member_count' => count($allUsers),
+        ],
         'notifications' => todoer_user_notifications($pdo, (int) $user['id']),
     ]);
 }
@@ -88,18 +102,18 @@ if ($method === 'POST') {
         if ($title === '') {
             todoer_fail('Task title cannot be empty.');
         }
-        if (todoer_is_game_running($pdo, $listType, todoer_period_key($listType))) {
+        if (todoer_is_game_running($pdo, $groupId, $listType, todoer_period_key($listType))) {
             todoer_fail('This list is running -- stop it before adding tasks.');
         }
 
         $assignedType = ($body['assigned_type'] ?? 'ANY_USER') === 'SPECIFIC_USER' ? 'SPECIFIC_USER' : 'ANY_USER';
         $assignedUserId = null;
         if ($assignedType === 'SPECIFIC_USER') {
+            // Must be a member of *this* group -- otherwise a hand-crafted request could park a
+            // task on an outsider, who would then see it in their own list.
             $assignedUserId = (int) ($body['assigned_user_id'] ?? 0);
-            $check = $pdo->prepare('SELECT 1 FROM users WHERE id = ?');
-            $check->execute([$assignedUserId]);
-            if (!$check->fetchColumn()) {
-                todoer_fail('Choose a valid person to lock this task to.');
+            if (!todoer_is_group_member($pdo, $groupId, $assignedUserId)) {
+                todoer_fail('Choose someone from your group to lock this task to.');
             }
         }
 
@@ -135,12 +149,12 @@ if ($method === 'POST') {
 
         $stmt = $pdo->prepare(
             "INSERT INTO tasks
-                (user_id, created_by, list_type, period_key, title, points, status,
+                (group_id, user_id, created_by, list_type, period_key, title, points, status,
                  window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes)
-             VALUES (NULL, ?, ?, ?, ?, ?, 'unassigned', ?, ?, ?, ?, ?, ?)"
+             VALUES (?, NULL, ?, ?, ?, ?, ?, 'unassigned', ?, ?, ?, ?, ?, ?)"
         );
         $stmt->execute([
-            $user['id'], $listType, $periodKey, $title, $points,
+            $groupId, $user['id'], $listType, $periodKey, $title, $points,
             $windowStart, $windowEnd, $assignedType, $assignedUserId, $priority, $timeLimitMinutes,
         ]);
         $taskId = (int) $pdo->lastInsertId();
@@ -157,7 +171,7 @@ if ($method === 'POST') {
         if (!in_array($listType, TODOER_LIST_TYPES, true)) {
             todoer_fail('Invalid list type.');
         }
-        $result = todoer_start_game($pdo, $listType);
+        $result = todoer_start_game($pdo, $groupId, $listType);
         todoer_respond(array_merge(['ok' => true], $result));
     }
 
@@ -166,14 +180,14 @@ if ($method === 'POST') {
         if (!in_array($listType, TODOER_LIST_TYPES, true)) {
             todoer_fail('Invalid list type.');
         }
-        $result = todoer_stop_game($pdo, $listType);
+        $result = todoer_stop_game($pdo, $groupId, $listType);
         todoer_respond(array_merge(['ok' => true], $result));
     }
 
     if ($action === 'complete' || $action === 'reopen') {
         $taskId = (int) ($body['task_id'] ?? 0);
-        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?');
-        $stmt->execute([$taskId, $user['id']]);
+        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND group_id = ? AND user_id = ?');
+        $stmt->execute([$taskId, $groupId, $user['id']]);
         $task = $stmt->fetch();
         if (!$task) {
             todoer_fail('Task not found.', 404);
@@ -184,7 +198,7 @@ if ($method === 'POST') {
             todoer_log_task_event($pdo, $taskId, 'completed', null, (int) $user['id']);
             // A completion can be exactly what finishes the period early -- check right away
             // instead of waiting for the next page load's bootstrap sweep.
-            todoer_maybe_finish_period_early($pdo, $task['list_type'], $task['period_key']);
+            todoer_maybe_finish_period_early($pdo, $groupId, $task['list_type'], $task['period_key']);
         } else {
             $upd = $pdo->prepare("UPDATE tasks SET status = 'open', completed_at = NULL WHERE id = ?");
             $upd->execute([$taskId]);
@@ -195,26 +209,26 @@ if ($method === 'POST') {
 
     if ($action === 'delete') {
         $taskId = (int) ($body['task_id'] ?? 0);
-        $stmt = $pdo->prepare('SELECT list_type, period_key FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
-        $stmt->execute([$taskId, $user['id'], $user['id']]);
+        $stmt = $pdo->prepare('SELECT list_type, period_key FROM tasks WHERE id = ? AND group_id = ? AND (user_id = ? OR created_by = ?)');
+        $stmt->execute([$taskId, $groupId, $user['id'], $user['id']]);
         $task = $stmt->fetch();
-        if ($task && todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
+        if ($task && todoer_is_game_running($pdo, $groupId, $task['list_type'], $task['period_key'])) {
             todoer_fail('This list is running -- stop it before deleting tasks.');
         }
-        $del = $pdo->prepare('DELETE FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
-        $del->execute([$taskId, $user['id'], $user['id']]);
+        $del = $pdo->prepare('DELETE FROM tasks WHERE id = ? AND group_id = ? AND (user_id = ? OR created_by = ?)');
+        $del->execute([$taskId, $groupId, $user['id'], $user['id']]);
         todoer_respond(['ok' => true]);
     }
 
     if ($action === 'edit') {
         $taskId = (int) ($body['task_id'] ?? 0);
-        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
-        $stmt->execute([$taskId, $user['id'], $user['id']]);
+        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND group_id = ? AND (user_id = ? OR created_by = ?)');
+        $stmt->execute([$taskId, $groupId, $user['id'], $user['id']]);
         $task = $stmt->fetch();
         if (!$task) {
             todoer_fail('Task not found.', 404);
         }
-        if (todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
+        if (todoer_is_game_running($pdo, $groupId, $task['list_type'], $task['period_key'])) {
             todoer_fail('This list is running -- stop it before editing tasks.');
         }
 
@@ -227,10 +241,8 @@ if ($method === 'POST') {
         $assignedUserId = null;
         if ($assignedType === 'SPECIFIC_USER') {
             $assignedUserId = (int) ($body['assigned_user_id'] ?? 0);
-            $check = $pdo->prepare('SELECT 1 FROM users WHERE id = ?');
-            $check->execute([$assignedUserId]);
-            if (!$check->fetchColumn()) {
-                todoer_fail('Choose a valid person to lock this task to.');
+            if (!todoer_is_group_member($pdo, $groupId, $assignedUserId)) {
+                todoer_fail('Choose someone from your group to lock this task to.');
             }
         }
 

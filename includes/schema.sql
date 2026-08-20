@@ -9,6 +9,42 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ---------------------------------------------------------------------------
+-- Groups: the privacy + competition boundary. Everything scoreable (tasks,
+-- start/stop state, closed periods, awards) belongs to exactly one group, and
+-- every query in the app is filtered by the caller's group -- so two groups
+-- using the same install never see each other's tasks and never appear in each
+-- other's leaderboards or prize history.
+--
+-- Membership is exactly one group per user (enforced by the unique index on
+-- group_members.user_id below). Registering creates a personal group with the
+-- new user as its admin, so "no group" is never a state the app has to handle;
+-- joining someone else's group (via invite code, or by being added by that
+-- group's admin) moves the user across.
+--
+-- role = 'admin' -> can add/remove members, rename the group, roll the invite
+-- code. A group always keeps at least one admin.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    invite_code TEXT NOT NULL UNIQUE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS group_members (
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin','member')),
+    joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (group_id, user_id)
+);
+
+-- One group per user: this is what makes "the scope is only the group" a data
+-- invariant rather than something each query has to remember.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+
 -- list_type: 'daily' | 'weekly' | 'monthly'
 -- period_key identifies which instance of that list the task belongs to:
 --   daily   -> 'YYYY-MM-DD'
@@ -27,6 +63,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- columns to it. Keep the two definitions in sync if you change this.
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,            -- owning group; every task query filters on this
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,             -- current holder; NULL while unassigned
     created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,  -- who added the task
     list_type TEXT NOT NULL CHECK (list_type IN ('daily','weekly','monthly')),
@@ -48,6 +85,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_user_period ON tasks(user_id, list_type, period_key);
 CREATE INDEX IF NOT EXISTS idx_tasks_period_status ON tasks(list_type, period_key, status);
+-- NOTE: the group_id index lives in todoer_migrate_groups() rather than here. On an existing
+-- install the CREATE TABLE above is skipped (IF NOT EXISTS) so tasks.group_id doesn't exist yet,
+-- and indexing a missing column would abort this whole script -- the migration creates the
+-- column and the index together instead, for new and upgraded installs alike.
 
 -- Append-only audit trail of assignment/reassignment/expiry events, so a timed-out
 -- reassignment is explainable ("why did this move to Sam?") instead of a silent mutation.
@@ -69,21 +110,23 @@ CREATE TABLE IF NOT EXISTS task_history (
 -- everything.
 CREATE TABLE IF NOT EXISTS game_starts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     list_type TEXT NOT NULL,
     period_key TEXT NOT NULL,
     running INTEGER NOT NULL DEFAULT 1,
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(list_type, period_key)
+    UNIQUE(group_id, list_type, period_key)
 );
 
 -- Tracks which (list_type, period_key) periods have already been tallied & awarded,
 -- so we never double-award a prize for the same period.
 CREATE TABLE IF NOT EXISTS periods_closed (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     list_type TEXT NOT NULL,
     period_key TEXT NOT NULL,
     closed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(list_type, period_key)
+    UNIQUE(group_id, list_type, period_key)
 );
 
 CREATE TABLE IF NOT EXISTS prizes (
@@ -91,8 +134,12 @@ CREATE TABLE IF NOT EXISTS prizes (
     description TEXT NOT NULL
 );
 
+-- The prize list is per group: UNIQUE(group_id, list_type, period_key) means each
+-- group crowns its own winner for the same day/week/month, and one group's awards
+-- never show up in another's history (see api/prizes.php).
 CREATE TABLE IF NOT EXISTS awards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     list_type TEXT NOT NULL,
     period_key TEXT NOT NULL,
@@ -100,7 +147,7 @@ CREATE TABLE IF NOT EXISTS awards (
     prize_id INTEGER NOT NULL REFERENCES prizes(id),
     claimed INTEGER NOT NULL DEFAULT 0,
     awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(list_type, period_key)
+    UNIQUE(group_id, list_type, period_key)
 );
 
 CREATE TABLE IF NOT EXISTS notifications (

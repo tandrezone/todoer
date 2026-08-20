@@ -24,6 +24,7 @@ $user = todoer_require_login();
       <span class="dot"></span><?= htmlspecialchars($user['username']) ?>
     </span>
     <a href="index.php">Dashboard</a>
+    <a href="group.php">Group</a>
     <a href="prizes.php">Prizes</a>
     <a href="logout.php">Log out</a>
   </nav>

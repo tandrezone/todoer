@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $username = $_POST['username'] ?? '';
         $password = $_POST['password'] ?? '';
         if ($mode === 'register') {
-            [$ok, $error] = todoer_register($username, $password);
+            [$ok, $error] = todoer_register($username, $password, $_POST['invite_code'] ?? '');
         } else {
             [$ok, $error] = todoer_login($username, $password);
         }
@@ -64,9 +64,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       <label>Password
         <input type="password" name="password" required minlength="8">
       </label>
+      <label class="invite-field" id="invite-field"<?= $mode === 'register' ? '' : ' hidden' ?>>Invite code <span class="optional">(optional)</span>
+        <input type="text" name="invite_code" maxlength="16" autocomplete="off" placeholder="joining friends? paste their code"
+               value="<?= htmlspecialchars($_POST['invite_code'] ?? '') ?>">
+      </label>
       <button type="submit" class="btn-primary" id="submit-btn"><?= $mode === 'register' ? 'Create account & join' : 'Log in' ?></button>
     </form>
-    <p class="hint">Everyone playing adds their own account, then adds tasks to the daily, weekly and monthly lists. Points add up automatically and the top scorer wins a prize when each period ends.</p>
+    <p class="hint">You play inside a <strong>group</strong>: everyone in it shares the same daily, weekly and monthly lists, competes on the same leaderboard, and wins prizes together. With an invite code you join an existing group; without one you get your own, private until you add someone &mdash; and either way, nobody outside your group sees your tasks or your standings.</p>
   </div>
 
 <script>
@@ -75,6 +79,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('mode-field').value = btn.dataset.mode;
+    // The invite code only means anything when creating an account.
+    document.getElementById('invite-field').hidden = btn.dataset.mode !== 'register';
     document.getElementById('submit-btn').textContent = btn.dataset.mode === 'register' ? 'Create account & join' : 'Log in';
   });
 });

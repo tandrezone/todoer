@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/groups.php';
 
 const TODOER_POINTS = [
     'daily' => 1,
@@ -101,40 +102,42 @@ function todoer_period_label(string $listType, string $periodKey): string {
 }
 
 /**
- * Closes any elapsed (not current) period that hasn't been tallied yet:
- * sums points per user for that period, crowns the top scorer, and
- * awards them a random prize from the pool. Ties are broken randomly.
- * Safe to call on every page load.
+ * Closes any elapsed (not current) period that hasn't been tallied yet, for one group: sums
+ * points per user for that period, crowns the top scorer, and awards them a random prize from
+ * the pool. Ties are broken randomly. Safe to call on every page load.
+ *
+ * Everything here is per group: each group closes its own copy of the same day/week/month and
+ * crowns its own winner, so one group's scores never decide another group's prize.
  */
-function todoer_close_elapsed_periods(PDO $pdo): void {
+function todoer_close_elapsed_periods(PDO $pdo, int $groupId): void {
     foreach (TODOER_LIST_TYPES as $listType) {
         $currentKey = todoer_period_key($listType);
 
         $stmt = $pdo->prepare(
             'SELECT DISTINCT period_key FROM tasks
-             WHERE list_type = ? AND period_key < ?
-             AND period_key NOT IN (SELECT period_key FROM periods_closed WHERE list_type = ?)'
+             WHERE group_id = ? AND list_type = ? AND period_key < ?
+             AND period_key NOT IN (SELECT period_key FROM periods_closed WHERE group_id = ? AND list_type = ?)'
         );
-        $stmt->execute([$listType, $currentKey, $listType]);
+        $stmt->execute([$groupId, $listType, $currentKey, $groupId, $listType]);
         $pendingKeys = array_column($stmt->fetchAll(), 'period_key');
 
         foreach ($pendingKeys as $periodKey) {
-            todoer_close_one_period($pdo, $listType, $periodKey);
+            todoer_close_one_period($pdo, $groupId, $listType, $periodKey);
         }
     }
 }
 
-function todoer_close_one_period(PDO $pdo, string $listType, string $periodKey): void {
+function todoer_close_one_period(PDO $pdo, int $groupId, string $listType, string $periodKey): void {
     $pdo->beginTransaction();
     try {
         $stmt = $pdo->prepare(
             "SELECT user_id, SUM(points) AS total
              FROM tasks
-             WHERE list_type = ? AND period_key = ? AND status = 'done'
+             WHERE group_id = ? AND list_type = ? AND period_key = ? AND status = 'done'
              GROUP BY user_id
              ORDER BY total DESC"
         );
-        $stmt->execute([$listType, $periodKey]);
+        $stmt->execute([$groupId, $listType, $periodKey]);
         $totals = $stmt->fetchAll();
 
         $topScore = $totals ? (int) $totals[0]['total'] : 0;
@@ -143,24 +146,29 @@ function todoer_close_one_period(PDO $pdo, string $listType, string $periodKey):
             $winners = array_values(array_filter($totals, fn($r) => (int) $r['total'] === $topScore));
             $winner = $winners[array_rand($winners)];
 
-            // Prefer a prize never awarded before; once the pool is exhausted, recycle randomly.
-            $prizeStmt = $pdo->query(
-                'SELECT id FROM prizes WHERE id NOT IN (SELECT prize_id FROM awards) ORDER BY RANDOM() LIMIT 1'
+            // Prefer a prize this *group* has never been awarded before; once the group has
+            // worked through the pool, recycle randomly. The pool of prize descriptions is
+            // shared install-wide, but "already won" is judged per group -- one group burning
+            // through prizes shouldn't leave another with nothing new to win.
+            $prizeStmt = $pdo->prepare(
+                'SELECT id FROM prizes WHERE id NOT IN (SELECT prize_id FROM awards WHERE group_id = ?)
+                 ORDER BY RANDOM() LIMIT 1'
             );
+            $prizeStmt->execute([$groupId]);
             $prizeId = $prizeStmt->fetchColumn();
             if ($prizeId === false) {
                 $prizeId = $pdo->query('SELECT id FROM prizes ORDER BY RANDOM() LIMIT 1')->fetchColumn();
             }
 
             $insert = $pdo->prepare(
-                'INSERT INTO awards (user_id, list_type, period_key, points, prize_id)
-                 VALUES (?, ?, ?, ?, ?)'
+                'INSERT INTO awards (group_id, user_id, list_type, period_key, points, prize_id)
+                 VALUES (?, ?, ?, ?, ?, ?)'
             );
-            $insert->execute([$winner['user_id'], $listType, $periodKey, $topScore, $prizeId]);
+            $insert->execute([$groupId, $winner['user_id'], $listType, $periodKey, $topScore, $prizeId]);
         }
 
-        $close = $pdo->prepare('INSERT OR IGNORE INTO periods_closed (list_type, period_key) VALUES (?, ?)');
-        $close->execute([$listType, $periodKey]);
+        $close = $pdo->prepare('INSERT OR IGNORE INTO periods_closed (group_id, list_type, period_key) VALUES (?, ?, ?)');
+        $close->execute([$groupId, $listType, $periodKey]);
 
         $pdo->commit();
     } catch (Throwable $e) {
@@ -169,31 +177,40 @@ function todoer_close_one_period(PDO $pdo, string $listType, string $periodKey):
     }
 }
 
-/** Points totals per user for a given list_type + period_key (current period by default). */
-function todoer_leaderboard(PDO $pdo, string $listType, ?string $periodKey = null): array {
+/**
+ * Points totals per user for a given list_type + period_key (current period by default), scoped
+ * to one group: only that group's members are rows, and only points earned on that group's tasks
+ * count. This is "no place in the prizelist outside your group" in query form.
+ */
+function todoer_leaderboard(PDO $pdo, int $groupId, string $listType, ?string $periodKey = null): array {
     $periodKey = $periodKey ?? todoer_period_key($listType);
     $stmt = $pdo->prepare(
         "SELECT u.id AS user_id, u.username, u.color,
                 COALESCE(SUM(CASE WHEN t.status = 'done' AND t.list_type = ? AND t.period_key = ? THEN t.points ELSE 0 END), 0) AS points
-         FROM users u
-         LEFT JOIN tasks t ON t.user_id = u.id
+         FROM group_members gm
+         JOIN users u ON u.id = gm.user_id
+         LEFT JOIN tasks t ON t.user_id = u.id AND t.group_id = gm.group_id
+         WHERE gm.group_id = ?
          GROUP BY u.id
          ORDER BY points DESC, u.username ASC"
     );
-    $stmt->execute([$listType, $periodKey]);
+    $stmt->execute([$listType, $periodKey, $groupId]);
     return $stmt->fetchAll();
 }
 
-/** All-time points totals per user, across every list type. */
-function todoer_all_time_leaderboard(PDO $pdo): array {
-    $stmt = $pdo->query(
+/** All-time points totals per user within one group, across every list type. */
+function todoer_all_time_leaderboard(PDO $pdo, int $groupId): array {
+    $stmt = $pdo->prepare(
         "SELECT u.id AS user_id, u.username, u.color,
                 COALESCE(SUM(CASE WHEN t.status = 'done' THEN t.points ELSE 0 END), 0) AS points,
-                (SELECT COUNT(*) FROM awards a WHERE a.user_id = u.id) AS prize_count
-         FROM users u
-         LEFT JOIN tasks t ON t.user_id = u.id
+                (SELECT COUNT(*) FROM awards a WHERE a.user_id = u.id AND a.group_id = gm.group_id) AS prize_count
+         FROM group_members gm
+         JOIN users u ON u.id = gm.user_id
+         LEFT JOIN tasks t ON t.user_id = u.id AND t.group_id = gm.group_id
+         WHERE gm.group_id = ?
          GROUP BY u.id
          ORDER BY points DESC, u.username ASC"
     );
+    $stmt->execute([$groupId]);
     return $stmt->fetchAll();
 }
