@@ -29,6 +29,7 @@ $jsV = @filemtime(__DIR__ . '/assets/js/group.js') ?: time();
     <a href="index.php">Dashboard</a>
     <a href="prizes.php">Prizes</a>
     <a href="import.php">Import</a>
+    <a href="backup.php">Backup</a>
     <a href="logout.php">Log out</a>
   </nav>
 </header>

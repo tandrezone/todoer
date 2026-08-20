@@ -27,6 +27,7 @@ $group = todoer_require_group($GLOBALS['pdo'], (int) $user['id'], $user['usernam
     <a href="index.php">Dashboard</a>
     <a href="group.php">Group</a>
     <a href="import.php">Import</a>
+    <a href="backup.php">Backup</a>
     <a href="logout.php">Log out</a>
   </nav>
 </header>
