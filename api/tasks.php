@@ -10,19 +10,6 @@ if (!$user) {
 $pdo = $GLOBALS['pdo'];
 $method = $_SERVER['REQUEST_METHOD'];
 
-/** Normalizes a <input type=datetime-local> value ("YYYY-MM-DDTHH:MM") to "YYYY-MM-DD HH:MM:00". */
-function todoer_normalize_datetime_input(?string $value): ?string {
-    $value = trim((string) $value);
-    if ($value === '') {
-        return null;
-    }
-    $ts = strtotime(str_replace('T', ' ', $value));
-    if ($ts === false) {
-        return null;
-    }
-    return date('Y-m-d H:i:s', $ts);
-}
-
 if ($method === 'GET') {
     $allUsers = $pdo->query('SELECT id, username, color, active FROM users ORDER BY username')->fetchAll();
 
@@ -107,14 +94,26 @@ if ($method === 'POST') {
             $timeLimitMinutes = max(1, (int) $body['time_limit_minutes']);
         }
 
-        $windowStart = todoer_normalize_datetime_input($body['window_start'] ?? null);
-        $windowEnd = todoer_normalize_datetime_input($body['window_end'] ?? null);
+        $periodKey = todoer_period_key($listType);
+        $points = TODOER_POINTS[$listType];
+
+        // Window fields are captured in whatever shorthand fits the list's natural cadence
+        // (a time-of-day for a daily task, a weekday for a weekly one, a day-of-month for a
+        // monthly one) and combined with the period here into an ordinary datetime -- see
+        // todoer_period_window_datetime() for why.
+        if ($listType === 'daily') {
+            $windowStart = todoer_period_window_datetime('daily', $periodKey, $body['window_start_time'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('daily', $periodKey, $body['window_end_time'] ?? null, true);
+        } elseif ($listType === 'weekly') {
+            $windowStart = todoer_period_window_datetime('weekly', $periodKey, $body['window_start_day'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('weekly', $periodKey, $body['window_end_day'] ?? null, true);
+        } else {
+            $windowStart = todoer_period_window_datetime('monthly', $periodKey, $body['window_start_dom'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('monthly', $periodKey, $body['window_end_dom'] ?? null, true);
+        }
         if ($windowStart !== null && $windowEnd !== null && $windowStart > $windowEnd) {
             todoer_fail('Window start must be before window end.');
         }
-
-        $periodKey = todoer_period_key($listType);
-        $points = TODOER_POINTS[$listType];
 
         $stmt = $pdo->prepare(
             "INSERT INTO tasks

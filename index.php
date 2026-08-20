@@ -1,6 +1,8 @@
 <?php
 require_once __DIR__ . '/includes/bootstrap.php';
 $user = todoer_require_login();
+$cssV = @filemtime(__DIR__ . '/assets/css/style.css') ?: time();
+$jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -8,7 +10,7 @@ $user = todoer_require_login();
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Todoer</title>
-<link rel="stylesheet" href="assets/css/style.css">
+<link rel="stylesheet" href="assets/css/style.css?v=<?= $cssV ?>">
 </head>
 <body>
 <header class="topbar">
@@ -44,7 +46,7 @@ $user = todoer_require_login();
           <button type="submit">+</button>
         </div>
         <details class="task-options">
-          <summary>Assignment &amp; timing options</summary>
+          <summary>+ Assign, prioritize, or set a time window</summary>
           <div class="task-options-grid">
             <label>Assign to
               <select name="assigned_type" class="assigned-type-select">
@@ -65,12 +67,47 @@ $user = todoer_require_login();
             <label class="time-limit-field">Time limit once assigned (minutes)
               <input type="number" name="time_limit_minutes" min="1" placeholder="no timer, just the window">
             </label>
-            <label>Window start
-              <input type="datetime-local" name="window_start">
-            </label>
-            <label>Window end
-              <input type="datetime-local" name="window_end">
-            </label>
+
+            <?php if ($type === 'daily'): ?>
+              <label>Window start (time of day)
+                <input type="time" name="window_start_time">
+              </label>
+              <label>Window end (time of day)
+                <input type="time" name="window_end_time">
+              </label>
+            <?php elseif ($type === 'weekly'): ?>
+              <label>Window start (day)
+                <select name="window_start_day">
+                  <option value="">&mdash;</option>
+                  <option value="1">Monday</option>
+                  <option value="2">Tuesday</option>
+                  <option value="3">Wednesday</option>
+                  <option value="4">Thursday</option>
+                  <option value="5">Friday</option>
+                  <option value="6">Saturday</option>
+                  <option value="7">Sunday</option>
+                </select>
+              </label>
+              <label>Window end (day)
+                <select name="window_end_day">
+                  <option value="">&mdash;</option>
+                  <option value="1">Monday</option>
+                  <option value="2">Tuesday</option>
+                  <option value="3">Wednesday</option>
+                  <option value="4">Thursday</option>
+                  <option value="5">Friday</option>
+                  <option value="6">Saturday</option>
+                  <option value="7">Sunday</option>
+                </select>
+              </label>
+            <?php else: ?>
+              <label>Window start (day of month)
+                <input type="number" name="window_start_dom" min="1" max="31" placeholder="e.g. 5">
+              </label>
+              <label>Window end (day of month)
+                <input type="number" name="window_end_dom" min="1" max="31" placeholder="e.g. 20">
+              </label>
+            <?php endif; ?>
           </div>
         </details>
       </form>
@@ -90,6 +127,6 @@ $user = todoer_require_login();
   </aside>
 </main>
 
-<script src="assets/js/app.js"></script>
+<script src="assets/js/app.js?v=<?= $jsV ?>"></script>
 </body>
 </html>

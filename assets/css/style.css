@@ -5,7 +5,17 @@
   --muted: #6b7280;
   --border: #e4e7ee;
   --accent: #5b8def;
+  --accent-bg: #eaf1ff;
   --good: #3fb682;
+  --good-bg: #e9f7ef;
+  --warn: #a3670a;
+  --warn-bg: #fff2cc;
+  --danger: #c0392b;
+  --danger-bg: #fdecea;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -73,7 +83,7 @@ form input[type=text], form input[type=password] {
   cursor: pointer;
 }
 
-.error { color: #c0392b; background: #fdecea; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+.error { color: var(--danger); background: var(--danger-bg); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 14px; }
 .hint { color: var(--muted); font-size: 13px; margin-top: 18px; line-height: 1.5; }
 
 /* ---------- App shell ---------- */
@@ -119,64 +129,71 @@ form input[type=text], form input[type=password] {
 }
 .list-card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; gap: 10px; }
 .list-card-head h2 { margin: 0; font-size: 16px; }
-.list-card-head-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.list-card-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .period-label { color: var(--muted); font-size: 12px; }
 .start-btn {
-  border: 1px solid var(--accent); background: #eaf1ff; color: var(--accent);
-  border-radius: 999px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;
+  border: 1px solid var(--border); background: var(--card); color: var(--muted);
+  border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
 }
-.start-btn:hover { background: var(--accent); color: white; }
-.unassigned-hint { color: #a3670a; background: #fff7e6; border: 1px solid #f2d9a3; border-radius: 8px; padding: 6px 10px; font-size: 12px; margin: 0 0 10px; }
+.start-btn:hover { border-color: var(--accent); color: var(--accent); }
+.unassigned-hint { color: var(--warn); background: var(--warn-bg); border: 1px solid #f2d9a3; border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: 0 0 10px; }
 
 .task-list { list-style: none; margin: 0 0 12px; padding: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }
-.task-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--bg); font-size: 14px; }
+.task-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg); font-size: 14px; }
 .task-item.done { opacity: 0.55; }
 .task-item.done .task-title { text-decoration: line-through; }
-.task-body { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.task-body { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 1px; }
 .task-title { word-break: break-word; }
 .task-meta { color: var(--muted); font-size: 11px; }
-.task-points { font-size: 11px; font-weight: 700; color: var(--accent); background: #eaf1ff; border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.task-window { font-variant-numeric: tabular-nums; }
 .task-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
-.task-del:hover { color: #c0392b; }
+.task-del:hover { color: var(--danger); }
 .empty-hint { color: var(--muted); font-size: 13px; padding: 10px 2px; }
 
-.priority-badge { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 2px 8px; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.02em; }
-.priority-badge.priority-high { background: #fdecea; color: #c0392b; }
-.priority-badge.priority-moderate { background: #fff2cc; color: #a3670a; }
-.priority-badge.priority-low { background: #e9f7ef; color: #1e8a56; }
+/* Shared "chip" look for every small status/label pill in the app, so priority, task-status,
+   and points all read as one family instead of each having its own shape/case/weight. */
+.chip {
+  display: inline-block; font-size: 11px; font-weight: 700; line-height: 1.6;
+  border-radius: var(--radius-pill); padding: 2px 9px; white-space: nowrap;
+}
+.task-points { color: var(--accent); background: var(--accent-bg); }
+.priority-badge.priority-high { color: var(--danger); background: var(--danger-bg); }
+.priority-badge.priority-moderate { color: var(--warn); background: var(--warn-bg); }
+.priority-badge.priority-low { color: var(--good); background: var(--good-bg); }
+.status-chip.status-unassigned { color: var(--muted); background: var(--bg); border: 1px solid var(--border); }
+.status-chip.status-open { color: var(--accent); background: var(--accent-bg); }
+.status-chip.status-done { color: var(--good); background: var(--good-bg); }
+.status-chip.status-expired { color: var(--danger); background: var(--danger-bg); }
 
 .add-task-form { display: flex; flex-direction: column; gap: 8px; }
 .add-task-row { display: flex; gap: 6px; }
-.add-task-row input { flex: 1; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); font-size: 14px; }
+.add-task-row input { flex: 1; padding: 9px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 14px; }
 .add-task-row button {
-  border: none; background: var(--accent); color: white; border-radius: 8px;
+  border: none; background: var(--accent); color: white; border-radius: var(--radius-sm);
   width: 36px; font-size: 18px; cursor: pointer;
 }
 
 .task-options { font-size: 12px; color: var(--muted); }
-.task-options summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
-.task-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.task-options-grid label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.task-options summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }
+.task-options summary:hover { color: var(--ink); }
+.task-options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.task-options-grid label { display: flex; flex-direction: column; gap: 5px; font-weight: 600; font-size: 12px; }
 .task-options-grid select, .task-options-grid input {
-  font-weight: 400; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); font-size: 12px;
+  font-weight: 400; font-family: inherit; color: var(--ink);
+  padding: 7px 9px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 13px;
 }
 .task-options-grid .disabled-field { opacity: 0.5; }
-.timer-hint { color: #c0392b; }
+.timer-hint { color: var(--danger); font-weight: 600; }
 
-.team-board { margin-top: 12px; font-size: 12px; }
+.team-board { margin-top: 12px; font-size: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .team-board summary { cursor: pointer; font-weight: 600; color: var(--muted); }
+.team-board summary:hover { color: var(--ink); }
 .board-count { font-weight: 400; color: var(--muted); }
-.board-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; max-height: 220px; overflow-y: auto; }
-.board-task-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--bg); }
+.board-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+.board-task-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--radius-sm); background: var(--bg); }
 .board-task-row .task-title { flex: 1; }
-.board-holder { display: flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; }
-.board-holder .dot { width: 8px; height: 8px; border-radius: 50%; }
-
-.status-chip { font-size: 10px; font-weight: 700; border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
-.status-chip.status-unassigned { background: #eee; color: var(--muted); }
-.status-chip.status-open { background: #eaf1ff; color: var(--accent); }
-.status-chip.status-done { background: #e9f7ef; color: #1e8a56; }
-.status-chip.status-expired { background: #fdecea; color: #c0392b; }
+.board-holder { display: flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; font-weight: 600; }
+.board-holder .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 .sidebar { display: flex; flex-direction: column; gap: 14px; }
 .board-card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }

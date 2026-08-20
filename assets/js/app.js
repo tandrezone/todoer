@@ -22,17 +22,36 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function formatWhen(dt) {
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function ordinal(n) {
+  const suffixes = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (suffixes[(v - 20) % 10] || suffixes[v] || suffixes[0]);
+}
+
+// Windows are shown in whatever grain matches the list's natural cadence, since the full
+// date is redundant: a daily window repeats every day (so just the time matters), a weekly
+// window only needs which day of the week, and a monthly one only needs which day of the
+// month. Storage-wise these are still full datetimes (see includes/period.php) -- this only
+// affects how they're displayed.
+function formatWindow(dt, listType) {
   if (!dt) return '';
   // SQLite datetimes come back as "YYYY-MM-DD HH:MM:SS"; Safari's Date parser wants a "T".
   const d = new Date(dt.replace(' ', 'T'));
   if (isNaN(d)) return dt;
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  if (listType === 'daily') {
+    return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  }
+  if (listType === 'weekly') {
+    return WEEKDAY_NAMES[(d.getDay() + 6) % 7]; // JS getDay(): Sun=0..Sat=6 -> Mon=0..Sun=6
+  }
+  return ordinal(d.getDate()); // monthly: day-of-month only, no month name
 }
 
 function priorityBadgeHtml(priority) {
   const label = PRIORITY_LABEL[priority] || priority;
-  return `<span class="priority-badge priority-${(priority || '').toLowerCase()}">${escapeHtml(label)}</span>`;
+  return `<span class="chip priority-badge priority-${(priority || '').toLowerCase()}">${escapeHtml(label)}</span>`;
 }
 
 function populateUserSelects(users) {
@@ -75,7 +94,9 @@ async function loadTasks() {
       li.className = 'task-item' + (task.status === 'done' ? ' done' : '');
       const meta = [];
       if (task.window_start || task.window_end) {
-        meta.push(`<span class="task-window">${escapeHtml(formatWhen(task.window_start))}${task.window_end ? ' &rarr; ' + escapeHtml(formatWhen(task.window_end)) : ''}</span>`);
+        const startStr = formatWindow(task.window_start, type);
+        const endStr = formatWindow(task.window_end, type);
+        meta.push(`<span class="task-window">${escapeHtml(startStr)}${endStr ? ' &rarr; ' + escapeHtml(endStr) : ''}</span>`);
       }
       if (task.priority === 'HIGH' && task.status === 'open') {
         meta.push('<span class="timer-hint">⏱ short timer</span>');
@@ -89,7 +110,7 @@ async function loadTasks() {
           ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
         </span>
         ${priorityBadgeHtml(task.priority)}
-        <span class="task-points">+${task.points}</span>
+        <span class="chip task-points">+${task.points}</span>
         <button class="task-del" data-del-id="${task.id}" title="Delete">&times;</button>
       `;
       listEl.appendChild(li);
@@ -108,9 +129,15 @@ async function loadTasks() {
       const holder = task.holder_username
         ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
         : (task.assigned_type === 'SPECIFIC_USER' ? '<em>locked, not yet assigned</em>' : '<em>unassigned</em>');
+      const boardStartStr = formatWindow(task.window_start, type);
+      const boardEndStr = formatWindow(task.window_end, type);
+      const windowHtml = (boardStartStr || boardEndStr)
+        ? `<span class="task-window">${escapeHtml(boardStartStr)}${boardEndStr ? ' &rarr; ' + escapeHtml(boardEndStr) : ''}</span>`
+        : '';
       li.innerHTML = `
-        <span class="status-chip status-${task.status}">${STATUS_LABEL[task.status] || task.status}</span>
+        <span class="chip status-chip status-${task.status}">${STATUS_LABEL[task.status] || task.status}</span>
         <span class="task-title">${escapeHtml(task.title)}</span>
+        ${windowHtml}
         ${priorityBadgeHtml(task.priority)}
         <span class="board-holder">${holder}</span>
       `;
@@ -182,11 +209,22 @@ function bindListEvents() {
         assigned_type: assignedType,
         priority: form.querySelector('select[name=priority]').value,
         time_limit_minutes: form.querySelector('input[name=time_limit_minutes]').value || null,
-        window_start: form.querySelector('input[name=window_start]').value || null,
-        window_end: form.querySelector('input[name=window_end]').value || null,
       };
       if (assignedType === 'SPECIFIC_USER') {
         payload.assigned_user_id = form.querySelector('select[name=assigned_user_id]').value;
+      }
+      // Window fields are named differently per list type (see index.php) since each list's
+      // window is captured in whatever grain fits its cadence -- a time-of-day, a weekday, or
+      // a day-of-month -- rather than a full date that would just repeat the period.
+      if (listType === 'daily') {
+        payload.window_start_time = form.querySelector('input[name=window_start_time]').value || null;
+        payload.window_end_time = form.querySelector('input[name=window_end_time]').value || null;
+      } else if (listType === 'weekly') {
+        payload.window_start_day = form.querySelector('select[name=window_start_day]').value || null;
+        payload.window_end_day = form.querySelector('select[name=window_end_day]').value || null;
+      } else {
+        payload.window_start_dom = form.querySelector('input[name=window_start_dom]').value || null;
+        payload.window_end_dom = form.querySelector('input[name=window_end_dom]').value || null;
       }
 
       form.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
