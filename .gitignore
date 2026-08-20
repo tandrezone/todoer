@@ -1,1 +1,4 @@
 data/*.sqlite
+data/*
+.env
+data/todoer.sqlite
