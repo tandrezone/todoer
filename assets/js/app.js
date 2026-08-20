@@ -64,6 +64,7 @@ function populateUserSelects(users) {
 
 async function loadTasks() {
   const data = await jsonFetch('api/tasks.php');
+  renderNotifications(data.notifications || []);
 
   if (data.users.length !== knownUserCount) {
     knownUserCount = data.users.length;
@@ -154,6 +155,25 @@ async function loadTasks() {
       boardList.appendChild(li);
     });
   });
+}
+
+function renderNotifications(notifications) {
+  const slot = document.getElementById('notification-slot');
+  slot.innerHTML = '';
+  if (!notifications.length) return;
+  notifications.forEach(notification => {
+    const div = document.createElement('div');
+    div.className = 'notification';
+    div.innerHTML = `<strong>${escapeHtml(notification.title)}</strong><span>${escapeHtml(notification.body)}</span>`;
+    slot.appendChild(div);
+  });
+  jsonFetch('api/tasks.php', {
+    method: 'POST',
+    body: JSON.stringify({
+      action: 'notifications_read',
+      ids: notifications.map(notification => notification.id),
+    }),
+  }).catch(() => {});
 }
 
 async function loadLeaderboard() {

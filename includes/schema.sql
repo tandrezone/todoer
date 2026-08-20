@@ -102,3 +102,14 @@ CREATE TABLE IF NOT EXISTS awards (
     awarded_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(list_type, period_key)
 );
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    event_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    read_at TEXT,
+    UNIQUE(user_id, event_key)
+);

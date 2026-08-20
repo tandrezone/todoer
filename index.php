@@ -32,6 +32,7 @@ $jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
 </header>
 
 <div id="banner-slot"></div>
+<div id="notification-slot" class="notification-slot"></div>
 
 <main class="layout">
   <section class="lists">

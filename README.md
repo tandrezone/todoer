@@ -46,6 +46,10 @@ this folder — no code changes needed.
   can mark their own prize as "claimed" once it's been redeemed in real life.
 - The sidebar leaderboard shows Today / This week / This month / All-time
   standings side by side.
+- The dashboard shows in-app notifications for everyone when a list starts, for the current holder
+  when a task reaches the final 10% of its effective time window, and for everyone when daily results
+  are calculated. Notifications are stored, delivered on the next dashboard visit, and sent only once
+  per event.
 
 ## Task assignment, priority & timers
 

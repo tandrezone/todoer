@@ -64,6 +64,19 @@ function todoer_db(): PDO {
  * straight away) is a no-op here.
  */
 function todoer_migrate(PDO $pdo): void {
+    $pdo->exec(
+        'CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime(\'now\')),
+            read_at TEXT,
+            UNIQUE(user_id, event_key)
+        )'
+    );
+
     // `active` has no CHECK constraint riding on it, so a plain ADD COLUMN is safe.
     $userCols = array_column($pdo->query('PRAGMA table_info(users)')->fetchAll(), 'name');
     if (!in_array('active', $userCols, true)) {

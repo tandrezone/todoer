@@ -166,6 +166,13 @@ function todoer_start_game(PDO $pdo, string $listType, ?string $periodKey = null
         );
         $mark->execute([$listType, $periodKey]);
 
+        todoer_notify_all(
+            $pdo,
+            'game-started:' . $listType . ':' . $periodKey,
+            ucfirst($listType) . ' game started',
+            'Tasks have been assigned. Good luck!'
+        );
+
         $pdo->commit();
         return [
             'started' => true,
@@ -293,6 +300,36 @@ function todoer_mark_expired(PDO $pdo, array $task, string $note): void {
     $stmt = $pdo->prepare("UPDATE tasks SET status = 'expired' WHERE id = ? AND status = 'open'");
     $stmt->execute([$task['id']]);
     todoer_log_task_event($pdo, (int) $task['id'], 'expired', $task['user_id'] !== null ? (int) $task['user_id'] : null, null, $note);
+}
+
+/** Notify the current holder once, when 90% of the task's effective time window has elapsed. */
+function todoer_process_deadline_notifications(PDO $pdo): void {
+    $stmt = $pdo->query(
+        "SELECT * FROM tasks
+         WHERE status = 'open' AND user_id IS NOT NULL AND (window_end IS NOT NULL OR assigned_at IS NOT NULL)"
+    );
+    $now = time();
+    foreach ($stmt->fetchAll() as $task) {
+        $start = !empty($task['window_start'])
+            ? strtotime($task['window_start'])
+            : strtotime($task['assigned_at']);
+        $deadline = todoer_task_deadline($task);
+        $end = $deadline !== null ? strtotime($deadline) : false;
+        if ($start === false || $end === false || $end <= $start) {
+            continue;
+        }
+        $warningAt = $start + (($end - $start) * 0.9);
+        if ($now < $warningAt || $now >= $end) {
+            continue;
+        }
+        todoer_notify_user(
+            $pdo,
+            (int) $task['user_id'],
+            'task-window-warning:' . $task['id'] . ':' . $task['assigned_at'] . ':' . $deadline,
+            'Task deadline approaching',
+            'Only 10% of the time window remains for "' . $task['title'] . '".'
+        );
+    }
 }
 
 /**

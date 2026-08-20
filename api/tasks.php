@@ -57,13 +57,23 @@ if ($method === 'GET') {
         ];
     }
 
-    todoer_respond(['ok' => true, 'tasks' => $tasks, 'users' => $allUsers]);
+    todoer_respond([
+        'ok' => true,
+        'tasks' => $tasks,
+        'users' => $allUsers,
+        'notifications' => todoer_user_notifications($pdo, (int) $user['id']),
+    ]);
 }
 
 if ($method === 'POST') {
     todoer_require_csrf();
     $body = todoer_json_body();
     $action = $body['action'] ?? '';
+
+    if ($action === 'notifications_read') {
+        todoer_mark_notifications_read($pdo, (int) $user['id'], $body['ids'] ?? []);
+        todoer_respond(['ok' => true]);
+    }
 
     if ($action === 'add') {
         $listType = $body['list_type'] ?? '';
