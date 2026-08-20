@@ -98,6 +98,42 @@ if ($method === 'GET') {
         ];
     }
 
+    // Weekly/monthly tasks don't get a visible list of their own -- they fold into Daily instead,
+    // gated by Daily's own Start/Stop (the only game switch that's still visible): while Daily is
+    // running, a weekly/monthly task shows there only inside its own time window and while it
+    // isn't done yet; while Daily is stopped, every not-done weekly/monthly task in the group
+    // shows regardless of window or who it's assigned to.
+    $dailyRunning = $tasks['daily']['running'];
+    $now = time();
+    $folded = [];
+    foreach (['weekly', 'monthly'] as $foldedType) {
+        foreach ($tasks[$foldedType]['board'] as $row) {
+            if ($row['status'] === 'done') {
+                continue;
+            }
+            if ($dailyRunning) {
+                $afterStart = empty($row['window_start']) || strtotime($row['window_start']) <= $now;
+                $beforeEnd = empty($row['window_end']) || strtotime($row['window_end']) >= $now;
+                if (!$afterStart || !$beforeEnd) {
+                    continue;
+                }
+            }
+            // Whether it can actually be claimed/ticked still follows that task's *own* list's
+            // Start/Stop -- api/tasks.php's 'complete' action enforces that server-side -- so the
+            // checkbox rendered here has to agree with it rather than with Daily's own state.
+            $folded[] = todoer_annotate_task_for_user($row, (int) $user['id'], $tasks[$foldedType]['running']);
+        }
+    }
+    if ($folded) {
+        if ($dailyRunning) {
+            $settled = array_values(array_filter($tasks['daily']['items'], fn($t) => in_array($t['status'], ['done', 'expired'], true)));
+            $live = array_values(array_filter($tasks['daily']['items'], fn($t) => !in_array($t['status'], ['done', 'expired'], true)));
+            $tasks['daily']['items'] = array_merge($live, todoer_sort_tasks_for_view($folded), $settled);
+        } else {
+            $tasks['daily']['items'] = array_merge($tasks['daily']['items'], $folded);
+        }
+    }
+
     todoer_respond([
         'ok' => true,
         'tasks' => $tasks,

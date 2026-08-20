@@ -1,4 +1,5 @@
 const LIST_TYPES = ['daily', 'weekly', 'monthly'];
+const LIST_LABEL = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly' };
 const PRIORITY_LABEL = { HIGH: 'High', MODERATE: 'Moderate', LOW: 'Low' };
 const STATUS_LABEL = { unassigned: 'Unassigned', open: 'In progress', done: 'Done', expired: 'Missed' };
 
@@ -197,6 +198,19 @@ async function loadTasks() {
     }
 
     const listEl = card.querySelector('[data-task-list]');
+    const boardList = card.querySelector('[data-board-list]');
+    const boardCount = card.querySelector('[data-board-count]');
+
+    // Weekly and monthly don't get a visible list of their own -- their tasks are folded into
+    // Daily's list by the API (see api/tasks.php). This card keeps its add-form/Start-Stop, but
+    // shows neither a task list nor a team board, so nothing renders twice.
+    if (type !== 'daily') {
+      listEl.innerHTML = '<li class="empty-hint">Shown in the Daily list above.</li>';
+      boardList.innerHTML = '';
+      boardCount.textContent = '(0)';
+      return;
+    }
+
     listEl.innerHTML = '';
     if (info.items.length === 0) {
       listEl.innerHTML = info.running
@@ -207,7 +221,8 @@ async function loadTasks() {
     // where "yours" ends and "anyone's" begins, so the top of the list still reads as your plate.
     let dividerPlaced = !info.running;
     info.items.forEach(task => {
-      taskCache.set(String(task.id), { ...task, listType: type });
+      const taskType = task.list_type; // may be weekly/monthly, folded in here rather than daily
+      taskCache.set(String(task.id), { ...task, listType: taskType });
 
       if (!dividerPlaced && !task.is_mine) {
         dividerPlaced = true;
@@ -225,8 +240,8 @@ async function loadTasks() {
         + (info.running && task.claimable ? ' claimable' : '');
       const meta = [];
       if (task.window_start || task.window_end) {
-        const startStr = formatWindow(task.window_start, type);
-        const endStr = formatWindow(task.window_end, type);
+        const startStr = formatWindow(task.window_start, taskType);
+        const endStr = formatWindow(task.window_end, taskType);
         meta.push(`<span class="task-window">${escapeHtml(startStr)}${endStr ? ' &rarr; ' + escapeHtml(endStr) : ''}</span>`);
       }
       if (task.priority === 'HIGH' && task.status === 'open') {
@@ -234,9 +249,12 @@ async function loadTasks() {
       } else if (task.time_limit_minutes && task.status === 'open') {
         meta.push(`<span class="timer-hint">⏱ ${task.time_limit_minutes}m</span>`);
       }
-      // Who has it, and (when you can't take it) why not.
+      // Who has it, and (when you can't take it) why not. Daily's own stopped view is always
+      // just your own tasks, so this only matters there while running -- but a folded
+      // weekly/monthly task can belong to someone else even while Daily is stopped, so those
+      // show a holder regardless.
       let holderHtml = '';
-      if (info.running && !task.is_mine) {
+      if ((info.running || taskType !== 'daily') && !task.is_mine) {
         const who = task.holder_username
           ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
           : '<em>unassigned</em>';
@@ -258,6 +276,7 @@ async function loadTasks() {
           ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
         </span>
         ${holderHtml}
+        ${taskType !== 'daily' ? `<span class="chip origin-badge">${LIST_LABEL[taskType]}</span>` : ''}
         ${priorityBadgeHtml(task.priority)}
         <span class="chip task-points">+${task.points}</span>
         <button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>
@@ -266,22 +285,20 @@ async function loadTasks() {
       listEl.appendChild(li);
     });
 
-    const boardList = card.querySelector('[data-board-list]');
-    const boardCount = card.querySelector('[data-board-count]');
     boardCount.textContent = `(${info.board.length})`;
     boardList.innerHTML = '';
     if (info.board.length === 0) {
       boardList.innerHTML = '<li class="empty-hint">No tasks in this period yet.</li>';
     }
     info.board.forEach(task => {
-      taskCache.set(String(task.id), { ...task, listType: type });
+      taskCache.set(String(task.id), { ...task, listType: task.list_type });
       const li = document.createElement('li');
       li.className = 'board-task-row';
       const holder = task.holder_username
         ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
         : (task.assigned_type === 'SPECIFIC_USER' ? '<em>locked, not yet assigned</em>' : '<em>unassigned</em>');
-      const boardStartStr = formatWindow(task.window_start, type);
-      const boardEndStr = formatWindow(task.window_end, type);
+      const boardStartStr = formatWindow(task.window_start, task.list_type);
+      const boardEndStr = formatWindow(task.window_end, task.list_type);
       const windowHtml = (boardStartStr || boardEndStr)
         ? `<span class="task-window">${escapeHtml(boardStartStr)}${boardEndStr ? ' &rarr; ' + escapeHtml(boardEndStr) : ''}</span>`
         : '';
