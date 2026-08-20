@@ -10,31 +10,66 @@ const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content ||
 async function setupPushNotifications() {
   const button = document.getElementById('enable-push');
   if (!button || !('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+
   const config = await jsonFetch('api/notifications.php');
+  // No server key means push isn't available at all (library missing / keys unwritable), and a
+  // blocked permission can't be re-asked from script -- either way, don't offer a dead button.
   if (!config.public_key || Notification.permission === 'denied') return;
+
   const registration = await navigator.serviceWorker.register('service-worker.js');
+  const serverKey = urlBase64ToUint8Array(config.public_key);
   let subscription = await registration.pushManager.getSubscription();
-  if (!subscription) {
-    button.hidden = false;
-    button.addEventListener('click', async () => {
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') return;
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(config.public_key),
-      });
-      await jsonFetch('api/notifications.php', {
-        method: 'POST',
-        body: JSON.stringify({ action: 'subscribe', subscription }),
-      });
-      button.hidden = true;
-    }, { once: true });
+
+  // A subscription is signed with the VAPID key it was created with. If the server's key has
+  // changed since (regenerated keypair, restored-from-backup install), that subscription is dead
+  // -- the push service rejects it with a 403 that only shows up in the server log. Detect the
+  // mismatch and start over rather than sitting on a subscription that can never deliver.
+  if (subscription && !sameKey(subscription.options?.applicationServerKey, serverKey)) {
+    try { await subscription.unsubscribe(); } catch (error) { /* re-subscribing is what matters */ }
+    subscription = null;
+  }
+
+  if (subscription) {
+    await sendSubscription(subscription);
+    button.hidden = true;
     return;
   }
-  await jsonFetch('api/notifications.php', {
+
+  button.hidden = false;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+      const fresh = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: serverKey,
+      });
+      await sendSubscription(fresh);
+      button.hidden = true;
+    } catch (err) {
+      alert('Could not turn on notifications: ' + err.message);
+    } finally {
+      // Left enabled on failure on purpose -- a denied prompt or a transient error should be
+      // retryable instead of leaving a permanently inert button on the page.
+      button.disabled = false;
+    }
+  });
+}
+
+function sendSubscription(subscription) {
+  return jsonFetch('api/notifications.php', {
     method: 'POST',
     body: JSON.stringify({ action: 'subscribe', subscription }),
   });
+}
+
+/** Byte-compare the key a subscription was made with against the one the server is using now. */
+function sameKey(a, b) {
+  if (!a || !b) return false;
+  const left = new Uint8Array(a);
+  if (left.length !== b.length) return false;
+  return left.every((byte, i) => byte === b[i]);
 }
 
 function urlBase64ToUint8Array(value) {
@@ -86,6 +121,21 @@ function formatWindow(dt, listType) {
     return WEEKDAY_NAMES[(d.getDay() + 6) % 7]; // JS getDay(): Sun=0..Sat=6 -> Mon=0..Sun=6
   }
   return ordinal(d.getDate()); // monthly: day-of-month only, no month name
+}
+
+// Mirrors todoer_claim_error_message() in includes/assignment.php -- the server decides, this
+// only phrases it.
+const CLAIM_BLOCKED_LABEL = {
+  locked: 'locked to them',
+  not_open_yet: 'window not open yet',
+  window_closed: 'window closed',
+  not_open: 'settled',
+  not_running: 'theirs while the list is stopped',
+  own: '',
+};
+
+function claimBlockedLabel(reason) {
+  return CLAIM_BLOCKED_LABEL[reason] ?? 'not available';
 }
 
 function priorityBadgeHtml(priority) {
@@ -150,13 +200,29 @@ async function loadTasks() {
     listEl.innerHTML = '';
     if (info.items.length === 0) {
       listEl.innerHTML = info.running
-        ? '<li class="empty-hint">Nothing assigned to you for this one.</li>'
+        ? '<li class="empty-hint">Nothing on this list.</li>'
         : '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
     }
+    // In game mode the list is the whole board, ordered mine-first by the API. A divider marks
+    // where "yours" ends and "anyone's" begins, so the top of the list still reads as your plate.
+    let dividerPlaced = !info.running;
     info.items.forEach(task => {
       taskCache.set(String(task.id), { ...task, listType: type });
+
+      if (!dividerPlaced && !task.is_mine) {
+        dividerPlaced = true;
+        const divider = document.createElement('li');
+        divider.className = 'list-divider';
+        divider.innerHTML = '<span>Up for grabs</span>';
+        listEl.appendChild(divider);
+      }
+
       const li = document.createElement('li');
-      li.className = 'task-item' + (task.status === 'done' ? ' done' : '');
+      li.className = 'task-item'
+        + (task.status === 'done' ? ' done' : '')
+        + (task.status === 'expired' ? ' expired' : '')
+        + (info.running && !task.is_mine ? ' not-mine' : '')
+        + (info.running && task.claimable ? ' claimable' : '');
       const meta = [];
       if (task.window_start || task.window_end) {
         const startStr = formatWindow(task.window_start, type);
@@ -168,12 +234,30 @@ async function loadTasks() {
       } else if (task.time_limit_minutes && task.status === 'open') {
         meta.push(`<span class="timer-hint">⏱ ${task.time_limit_minutes}m</span>`);
       }
+      // Who has it, and (when you can't take it) why not.
+      let holderHtml = '';
+      if (info.running && !task.is_mine) {
+        const who = task.holder_username
+          ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
+          : '<em>unassigned</em>';
+        holderHtml = `<span class="task-holder">${who}</span>`;
+        if (task.claimable) {
+          meta.push('<span class="claim-hint">yours if you get there first</span>');
+        } else if (task.status === 'open') {
+          meta.push(`<span class="claim-blocked">${escapeHtml(claimBlockedLabel(task.claim_reason))}</span>`);
+        }
+      }
+      const checkbox = task.can_complete
+        ? `<input type="checkbox" ${task.status === 'done' ? 'checked' : ''} data-task-id="${task.id}"
+             ${task.claimable ? 'title="Do this one instead — the points come to you"' : ''}>`
+        : `<span class="task-check-placeholder" title="${escapeHtml(claimBlockedLabel(task.claim_reason))}"></span>`;
       li.innerHTML = `
-        <input type="checkbox" ${task.status === 'done' ? 'checked' : ''} data-task-id="${task.id}">
+        ${checkbox}
         <span class="task-body">
           <span class="task-title">${escapeHtml(task.title)}</span>
           ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
         </span>
+        ${holderHtml}
         ${priorityBadgeHtml(task.priority)}
         <span class="chip task-points">+${task.points}</span>
         <button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>
@@ -404,7 +488,10 @@ function bindListEvents() {
         });
         await Promise.all([loadTasks(), loadLeaderboard(), loadBanner()]);
       } catch (err) {
+        // A refused claim usually means somebody beat you to it or the window moved, so reload
+        // to show the board as it actually is now instead of leaving a stale checkbox ticked.
         alert(err.message);
+        await loadTasks();
       }
       return;
     }

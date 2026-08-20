@@ -386,3 +386,118 @@ function todoer_maybe_finish_period_early(PDO $pdo, int $groupId, string $listTy
 
     todoer_close_one_period($pdo, $groupId, $listType, $periodKey);
 }
+
+/**
+ * Whether $userId is allowed to do (and take credit for) a task that is currently somebody
+ * else's. This is the "steal" rule of game mode: an open task in the shared pool is up for
+ * grabs while its window is live, so if the person holding it hasn't checked it off, anyone in
+ * the group can do it instead and bank the points.
+ *
+ * Returns [claimable, reason]. `reason` is a short machine code the UI turns into a tooltip:
+ *   own            -- already yours, nothing to claim
+ *   not_open       -- done, expired, or still unassigned; only live tasks can be taken
+ *   locked         -- assigned to a specific person on purpose, so it is theirs alone
+ *   not_open_yet   -- its window hasn't started (Time1 is in the future)
+ *   window_closed  -- its deadline has passed; the sweep will expire or reassign it
+ */
+function todoer_task_claim_state(array $task, int $userId, ?int $now = null): array {
+    $now = $now ?? time();
+
+    if ((int) $task['user_id'] === $userId) {
+        return [false, 'own'];
+    }
+    if ($task['status'] !== 'open' || $task['user_id'] === null) {
+        return [false, 'not_open'];
+    }
+    // A SPECIFIC_USER task was deliberately pinned to one person -- taking it would defeat the
+    // point of locking it, so these are never claimable no matter how overdue they get.
+    if ($task['assigned_type'] === 'SPECIFIC_USER') {
+        return [false, 'locked'];
+    }
+    if (!empty($task['window_start']) && strtotime($task['window_start']) > $now) {
+        return [false, 'not_open_yet'];
+    }
+    $deadline = todoer_task_deadline($task);
+    if ($deadline !== null && strtotime($deadline) <= $now) {
+        return [false, 'window_closed'];
+    }
+    return [true, ''];
+}
+
+/**
+ * Adds the per-viewer flags the dashboard needs on top of a raw task row: whose it is, whether
+ * this viewer may tick it off, and -- when they may not -- why. Computed server-side so the
+ * checkbox the client renders and the rule the API enforces can't drift apart.
+ */
+function todoer_annotate_task_for_user(array $task, int $userId, bool $gameRunning = true): array {
+    $isMine = (int) $task['user_id'] === $userId;
+    // Taking over someone else's task is a game-mode move. While a list is stopped it's being
+    // planned and reshuffled, not played, so nothing is up for grabs.
+    [$claimable, $reason] = $gameRunning
+        ? todoer_task_claim_state($task, $userId)
+        : [false, $isMine ? 'own' : 'not_running'];
+
+    $task['is_mine'] = $isMine;
+    $task['claimable'] = $claimable;
+    $task['claim_reason'] = $reason;
+    // Mine (open or already done -- so it can be un-ticked), or someone else's and up for grabs.
+    $task['can_complete'] = ($isMine && in_array($task['status'], ['open', 'done'], true)) || $claimable;
+    $task['can_edit'] = $isMine || (int) $task['created_by'] === $userId;
+    return $task;
+}
+
+/**
+ * Hands a claimed task back to whoever it was taken from, when the claimer un-ticks it.
+ *
+ * There's no "previous holder" column: the append-only task_history *is* the record, so the
+ * original holder is read back from the most recent 'claimed' event on this task. Returns the
+ * user id the task was returned to, or null if this task was never claimed (in which case the
+ * caller just reopens it normally and it stays put).
+ */
+function todoer_undo_claim(PDO $pdo, int $taskId, int $claimerId): ?int {
+    $stmt = $pdo->prepare(
+        "SELECT from_user_id, to_user_id FROM task_history
+         WHERE task_id = ? AND event = 'reassigned' AND note = 'claimed by another player'
+         ORDER BY id DESC LIMIT 1"
+    );
+    $stmt->execute([$taskId]);
+    $claim = $stmt->fetch();
+    if (!$claim || (int) $claim['to_user_id'] !== $claimerId || $claim['from_user_id'] === null) {
+        return null;
+    }
+
+    $originalHolder = (int) $claim['from_user_id'];
+    // Only give it back if they're still in the group and playing; otherwise leave it with the
+    // claimer rather than parking it on someone who can't act on it.
+    $check = $pdo->prepare(
+        'SELECT 1 FROM group_members gm JOIN users u ON u.id = gm.user_id
+         WHERE gm.user_id = ? AND gm.group_id = (SELECT group_id FROM tasks WHERE id = ?) AND u.active = 1'
+    );
+    $check->execute([$originalHolder, $taskId]);
+    if (!$check->fetchColumn()) {
+        return null;
+    }
+
+    $upd = $pdo->prepare("UPDATE tasks SET user_id = ?, status = 'open', completed_at = NULL WHERE id = ?");
+    $upd->execute([$originalHolder, $taskId]);
+    todoer_log_task_event($pdo, $taskId, 'reassigned', $claimerId, $originalHolder, 'claim undone');
+    return $originalHolder;
+}
+
+/** Turns a todoer_task_claim_state() reason code into something worth reading. */
+function todoer_claim_error_message(string $reason): string {
+    switch ($reason) {
+        case 'locked':
+            return 'That task is locked to one person, so only they can do it.';
+        case 'not_open_yet':
+            return "That task's time window hasn't opened yet.";
+        case 'window_closed':
+            return "That task's time window has closed.";
+        case 'not_open':
+            return 'That task is already settled.';
+        case 'not_running':
+            return "That list isn't running -- only the person it's assigned to can tick it off.";
+        default:
+            return "You can't do that task right now.";
+    }
+}

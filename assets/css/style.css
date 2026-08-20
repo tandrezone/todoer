@@ -393,3 +393,28 @@ form input[type=text], form input[type=password] {
 }
 
 .invite-field .optional { font-weight: 400; text-transform: none; color: var(--muted); }
+
+/* ---------------------------------------------------------------------------
+   Game mode: the list shows the whole board, not just your own plate. Yours sit
+   above the divider; below it are other people's live tasks, which you can take
+   over while their window is open. Everything below the divider is visually
+   quieter so the top of the list still reads as "what I'm meant to be doing".
+   --------------------------------------------------------------------------- */
+.list-divider {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin: 6px 0 2px;
+}
+.list-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+.task-item.not-mine { background: transparent; border: 1px dashed var(--border); }
+.task-item.not-mine.claimable { border-color: var(--accent); border-style: solid; background: var(--card); }
+.task-item.not-mine .task-title { color: var(--muted); }
+.task-item.not-mine.claimable .task-title { color: var(--ink); }
+.task-holder { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.claim-hint { color: var(--accent); font-weight: 700; }
+.claim-blocked { color: var(--muted); font-style: italic; }
+.task-item.expired { opacity: 0.65; }
+.task-item.expired .task-title { text-decoration: line-through; }
+/* Keeps rows aligned where there's no checkbox to show (a task you can't tick). */
+.task-check-placeholder { width: 13px; height: 13px; flex: 0 0 13px; border-radius: 3px; border: 1px dashed var(--border); }

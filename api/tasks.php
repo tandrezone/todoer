@@ -24,48 +24,77 @@ if ($method === 'GET') {
     foreach (TODOER_LIST_TYPES as $listType) {
         $periodKey = todoer_period_key($listType);
 
-        // "My" view: whatever is currently assigned to me (never 'unassigned' -- those have no
-        // user_id yet -- and never 'expired', which only applies to locked tasks nobody can
-        // pick back up). Open tasks are ordered per the spec: window_start, then priority;
-        // completed tasks stay appended in original done order underneath.
-        $mine = $pdo->prepare("SELECT * FROM tasks WHERE group_id = ? AND user_id = ? AND list_type = ? AND period_key = ?
-                                AND status IN ('open', 'done') ORDER BY created_at ASC");
-        $mine->execute([$groupId, $user['id'], $listType, $periodKey]);
-        $mineRows = $mine->fetchAll();
-        $openMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'open'));
-        $doneMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'done'));
-        $items = array_merge(todoer_sort_tasks_for_view($openMine), $doneMine);
-
         $running = todoer_is_game_running($pdo, $groupId, $listType, $periodKey);
+
+        // Everything in this period, with its current holder -- one query feeding both the
+        // in-game list and the (stopped-mode) team board below.
+        $allStmt = $pdo->prepare(
+            "SELECT t.*, u.username AS holder_username, u.color AS holder_color
+             FROM tasks t LEFT JOIN users u ON u.id = t.user_id
+             WHERE t.group_id = ? AND t.list_type = ? AND t.period_key = ?
+             ORDER BY t.created_at ASC"
+        );
+        $allStmt->execute([$groupId, $listType, $periodKey]);
+        $allRows = array_map(
+            fn(array $task): array => todoer_annotate_task_for_user($task, (int) $user['id'], $running),
+            $allStmt->fetchAll()
+        );
+
+        if ($running) {
+            // Game mode: the whole board is the playing field, because an open task the holder
+            // hasn't ticked yet is up for grabs (see todoer_task_claim_state()). Mine come first
+            // so "what am I meant to be doing" is still the top of the list, then everyone
+            // else's live tasks, then whatever is already settled.
+            $mineOpen = array_values(array_filter($allRows, fn($t) => $t['is_mine'] && $t['status'] === 'open'));
+            $othersLive = array_values(array_filter(
+                $allRows,
+                fn($t) => !$t['is_mine'] && in_array($t['status'], ['open', 'unassigned'], true)
+            ));
+            $settled = array_values(array_filter($allRows, fn($t) => in_array($t['status'], ['done', 'expired'], true)));
+            usort($settled, fn($a, $b) => strcmp((string) $a['completed_at'], (string) $b['completed_at']));
+            $items = array_merge(
+                todoer_sort_tasks_for_view($mineOpen),
+                todoer_sort_tasks_for_view($othersLive),
+                $settled
+            );
+        } else {
+            // Stopped: the list is just your own plate, and the full picture lives in the
+            // "Team board" panel that game mode hides. Open tasks are ordered per the spec:
+            // window_start, then priority; completed tasks stay appended underneath.
+            $mineRows = array_values(array_filter(
+                $allRows,
+                fn($t) => $t['is_mine'] && in_array($t['status'], ['open', 'done'], true)
+            ));
+            $openMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'open'));
+            $doneMine = array_values(array_filter($mineRows, fn($t) => $t['status'] === 'done'));
+            $items = array_merge(todoer_sort_tasks_for_view($openMine), $doneMine);
+        }
 
         $unassignedCount = $pdo->prepare(
             "SELECT COUNT(*) FROM tasks WHERE group_id = ? AND list_type = ? AND period_key = ? AND status = 'unassigned'"
         );
         $unassignedCount->execute([$groupId, $listType, $periodKey]);
 
-        // Shared board: every task in this period *belonging to this group*, so locked/other
-        // members'/expired tasks are still visible to the whole group even though they won't show
-        // up in "My" list above -- and tasks from any other group never appear at all.
-        $boardStmt = $pdo->prepare(
-            "SELECT t.*, u.username AS holder_username, u.color AS holder_color
-             FROM tasks t LEFT JOIN users u ON u.id = t.user_id
-             WHERE t.group_id = ? AND t.list_type = ? AND t.period_key = ?
-             ORDER BY (t.status = 'done'), t.created_at ASC"
-        );
-        $boardStmt->execute([$groupId, $listType, $periodKey]);
+        // Shared board (shown while stopped): every task in this period *belonging to this
+        // group*, so locked/other members'/expired tasks are still visible to the whole group
+        // even though they won't show up in the personal list above -- and tasks from any other
+        // group never appear at all.
+        $board = $allRows;
+        usort($board, function (array $a, array $b): int {
+            $aDone = $a['status'] === 'done' ? 1 : 0;
+            $bDone = $b['status'] === 'done' ? 1 : 0;
+            return $aDone === $bDone ? strcmp((string) $a['created_at'], (string) $b['created_at']) : $aDone <=> $bDone;
+        });
 
         $tasks[$listType] = [
             'period_key' => $periodKey,
             'label' => todoer_period_label($listType, $periodKey),
-            // While running: no adding/editing/deleting -- just this list, checked off as done.
+            // While running: no adding/editing/deleting -- just the shared list, ticked off as
+            // tasks get done, whoever they were handed to.
             'running' => $running,
             'unassigned_count' => (int) $unassignedCount->fetchColumn(),
             'items' => $items,
-            'board' => array_map(function (array $task) use ($user): array {
-                $task['can_edit'] = (int) $task['user_id'] === (int) $user['id']
-                    || (int) $task['created_by'] === (int) $user['id'];
-                return $task;
-            }, $boardStmt->fetchAll()),
+            'board' => $board,
         ];
     }
 
@@ -186,25 +215,70 @@ if ($method === 'POST') {
 
     if ($action === 'complete' || $action === 'reopen') {
         $taskId = (int) ($body['task_id'] ?? 0);
-        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND group_id = ? AND user_id = ?');
-        $stmt->execute([$taskId, $groupId, $user['id']]);
+        // Scoped to the group, but *not* to the caller as holder: in game mode you can also do a
+        // task that's currently someone else's, as long as it's still up for grabs. Whether this
+        // particular task qualifies is decided below, never by the client.
+        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND group_id = ?');
+        $stmt->execute([$taskId, $groupId]);
         $task = $stmt->fetch();
         if (!$task) {
             todoer_fail('Task not found.', 404);
         }
+        $isMine = (int) $task['user_id'] === (int) $user['id'];
+
         if ($action === 'complete') {
+            $claimedFrom = null;
+            if (!$isMine) {
+                if (!todoer_is_game_running($pdo, $groupId, $task['list_type'], $task['period_key'])) {
+                    todoer_fail(todoer_claim_error_message('not_running'), 403);
+                }
+                [$claimable, $reason] = todoer_task_claim_state($task, (int) $user['id']);
+                if (!$claimable) {
+                    todoer_fail(todoer_claim_error_message($reason), 403);
+                }
+                // Taking it over and finishing it are one atomic step: there's no "claimed but
+                // not done" state to sit on, so nobody can hoard other people's tasks.
+                $claimedFrom = (int) $task['user_id'];
+                $take = $pdo->prepare(
+                    "UPDATE tasks SET user_id = ? WHERE id = ? AND user_id = ? AND status = 'open'"
+                );
+                $take->execute([$user['id'], $taskId, $claimedFrom]);
+                if ($take->rowCount() === 0) {
+                    // Someone else got there in the milliseconds since we read the row.
+                    todoer_fail('Too slow -- somebody else just took that one.', 409);
+                }
+                todoer_log_task_event($pdo, $taskId, 'reassigned', $claimedFrom, (int) $user['id'], 'claimed by another player');
+            }
+
             $upd = $pdo->prepare("UPDATE tasks SET status = 'done', completed_at = datetime('now') WHERE id = ?");
             $upd->execute([$taskId]);
             todoer_log_task_event($pdo, $taskId, 'completed', null, (int) $user['id']);
+
+            // Tell the person it was taken from -- losing points to someone else is the whole
+            // tension of the game, so it shouldn't happen silently.
+            if ($claimedFrom !== null) {
+                todoer_notify_task_claimed($pdo, $claimedFrom, (int) $user['id'], $user['username'], $task);
+            }
+
             // A completion can be exactly what finishes the period early -- check right away
             // instead of waiting for the next page load's bootstrap sweep.
             todoer_maybe_finish_period_early($pdo, $groupId, $task['list_type'], $task['period_key']);
-        } else {
+            todoer_respond(['ok' => true, 'claimed_from' => $claimedFrom]);
+        }
+
+        // Un-ticking is only ever something you can do to a task you hold.
+        if (!$isMine) {
+            todoer_fail("That task isn't yours to un-tick.", 403);
+        }
+        // If you'd taken this one off someone else, un-ticking gives it back rather than leaving
+        // you sitting on their task.
+        $returnedTo = todoer_undo_claim($pdo, $taskId, (int) $user['id']);
+        if ($returnedTo === null) {
             $upd = $pdo->prepare("UPDATE tasks SET status = 'open', completed_at = NULL WHERE id = ?");
             $upd->execute([$taskId]);
             todoer_log_task_event($pdo, $taskId, 'reopened', null, (int) $user['id']);
         }
-        todoer_respond(['ok' => true]);
+        todoer_respond(['ok' => true, 'returned_to' => $returnedTo]);
     }
 
     if ($action === 'delete') {

@@ -9,7 +9,15 @@ if (!$user) {
 
 $pdo = $GLOBALS['pdo'];
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    todoer_respond(['ok' => true, 'public_key' => todoer_push_public_key()]);
+    // The service worker re-subscribes on its own when the browser rotates an endpoint
+    // (pushsubscriptionchange), and that POST needs the session's CSRF token -- it has no page to
+    // read a <meta> tag from. Handing it back here is safe: a cross-origin caller can't read this
+    // response, and any same-origin page could already read the token from its own markup.
+    todoer_respond([
+        'ok' => true,
+        'public_key' => todoer_push_public_key(),
+        'csrf_token' => todoer_csrf_token(),
+    ]);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

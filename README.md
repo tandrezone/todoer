@@ -30,29 +30,33 @@ pool. Nothing else to configure.
 
 ### Web Push notifications
 
-Web Push is optional and requires HTTPS (localhost is also allowed by browsers). Install the
-server library with Composer:
+Web Push needs two things: the server library, and HTTPS (browsers also allow plain
+`http://localhost`, so local testing works without certificates).
 
 ```
 composer install
 ```
 
-Generate a VAPID key pair once with:
-
-```
-php -r "require 'vendor/autoload.php'; print_r(Minishlink\\WebPush\\VAPID::createVapidKeys());"
-```
-
-Set the returned values in the PHP server environment before starting Todoer:
+That's the whole setup. Todoer generates its own VAPID key pair on first use and stores it in
+`data/vapid.json` (mode 0600, and `data/` is gitignored) — there is nothing to configure. If you'd
+rather manage keys yourself, set both environment variables and they take precedence over the
+file:
 
 ```
 TODOER_VAPID_PUBLIC_KEY=...
 TODOER_VAPID_PRIVATE_KEY=...
-TODOER_VAPID_SUBJECT=mailto:you@example.com
+TODOER_VAPID_SUBJECT=mailto:you@example.com   # optional, used as the VAPID contact
 ```
 
-After signing in, each browser/device can choose **Enable notifications**. Existing in-app
-notifications continue to work when Composer or VAPID configuration is unavailable.
+After signing in, each browser/device can choose **Enable notifications**. In-app notifications
+work regardless — if Composer hasn't been run, or the key file can't be written, push quietly
+stays off (the reason is written to the PHP error log) and nothing else is affected.
+
+Rotating the keypair (deleting `data/vapid.json`, or switching to environment variables) makes
+every existing browser subscription invalid. That's handled: the server drops subscriptions the
+push service rejects, and each browser notices the key changed on its next visit and
+re-subscribes. Push delivery is also best-effort — an unreachable push service is logged and
+ignored, never surfaced as a failed task completion.
 
 To run it permanently in the background instead of a one-off terminal window,
 put it behind any standard PHP web server (Apache/Nginx + php-fpm) pointed at
@@ -110,6 +114,26 @@ person is in your group. See `includes/groups.php`.
   when a task reaches the final 10% of its effective time window, and for everyone when daily results
   are calculated. Notifications are stored, delivered on the next dashboard visit, and sent only once
   per event.
+
+## Game mode: the shared board
+
+Pressing **Start** on a list puts it in game mode. While a list is running:
+
+- Adding, editing and deleting are locked; the list becomes the board you play on.
+- The list shows **every** task in that period, not just yours, with **your own tasks at the
+  top** — so "what am I meant to be doing" is still the first thing you read.
+- Below the "Up for grabs" divider are the other players' live tasks. Any of them can be **taken
+  over**: if its time window is open and the person holding it hasn't ticked it off yet, you can
+  do it instead and the points come to you. This is the race the game is built around.
+- Taking over and completing are one step, so nobody can reserve other people's tasks and sit on
+  them. If two people tick the same task at once, the loser gets "somebody else just took that
+  one" rather than a double completion.
+- A task **locked to a specific person** is never up for grabs, and a task whose window hasn't
+  opened yet (or has already closed) can't be taken either. The row says which of those it is.
+- Whoever lost the task gets a notification naming who took it and how many points went with it
+  (in-app, plus a push notification if they've enabled it).
+- Un-ticking a task you took over hands it back to the person you took it from, rather than
+  leaving you holding their task.
 
 ## Task assignment, priority & timers
 
