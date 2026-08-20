@@ -202,8 +202,11 @@ form input[type=text], form input[type=password] {
 .team-board summary:hover { color: var(--ink); }
 .board-count { font-weight: 400; color: var(--muted); }
 .board-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
-.board-task-row { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--radius-sm); background: var(--bg); }
-.board-task-row .task-title { flex: 1; }
+.board-task-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 7px 9px; border-radius: var(--radius-sm); background: var(--bg); }
+/* min-width keeps a short title (eg. "milk") from being squeezed down to a one-letter-per-line
+   column when the row's other chips (status/priority/holder) don't leave much space in a narrow
+   card -- flex-wrap above lets the row wrap onto a second line instead once it's this tight. */
+.board-task-row .task-title { flex: 1 1 auto; min-width: 70px; }
 .board-holder { display: flex; align-items: center; gap: 5px; color: var(--muted); white-space: nowrap; font-weight: 600; }
 .board-holder .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 

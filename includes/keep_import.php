@@ -14,6 +14,13 @@
 // }
 // Checklist notes have "listContent"; plain notes have "textContent" instead.
 
+// Zip-bomb guards for the .zip upload path (see todoer_keep_notes_from_upload()): a real Keep
+// Takeout export is a flat pile of small plain-text JSON files, so these ceilings are generous
+// for genuine use while still bounding worst-case memory/CPU from a malicious archive.
+const TODOER_KEEP_ZIP_MAX_ENTRIES = 20000;
+const TODOER_KEEP_ZIP_MAX_ENTRY_BYTES = 5 * 1024 * 1024;        // 5 MB per note file
+const TODOER_KEEP_ZIP_MAX_TOTAL_BYTES = 100 * 1024 * 1024;      // 100 MB decompressed, combined
+
 /**
  * Reads an uploaded file (a single .json note, or a .zip containing many)
  * and returns a flat array of parsed note structures:
@@ -40,11 +47,35 @@ function todoer_keep_notes_from_upload(string $tmpPath, string $originalName): a
         if ($zip->open($tmpPath) !== true) {
             throw new RuntimeException("Could not open \"$originalName\" as a zip file.");
         }
+
+        // Guard against zip bombs (a tiny archive that decompresses to gigabytes, or one with an
+        // enormous number of entries) before any decompression happens: a Keep export is just
+        // plain-text JSON notes, so these limits are far above anything a real export needs.
+        if ($zip->numFiles > TODOER_KEEP_ZIP_MAX_ENTRIES) {
+            $zip->close();
+            throw new RuntimeException(
+                "\"$originalName\" has too many files (" . $zip->numFiles . ') to be a real Keep export.'
+            );
+        }
+
         $notes = [];
+        $totalUncompressed = 0;
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $entryName = $zip->getNameIndex($i);
             if (strtolower(pathinfo($entryName, PATHINFO_EXTENSION)) !== 'json') {
                 continue;
+            }
+            $stat = $zip->statIndex($i);
+            $size = $stat['size'] ?? 0;
+            if ($size > TODOER_KEEP_ZIP_MAX_ENTRY_BYTES) {
+                continue; // a single "note" this large isn't a real Keep note -- skip it
+            }
+            $totalUncompressed += $size;
+            if ($totalUncompressed > TODOER_KEEP_ZIP_MAX_TOTAL_BYTES) {
+                $zip->close();
+                throw new RuntimeException(
+                    "\"$originalName\" decompresses to more data than a Keep export should -- refusing to continue."
+                );
             }
             $contents = $zip->getFromIndex($i);
             if ($contents === false) {

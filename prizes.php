@@ -7,7 +7,13 @@ $user = todoer_require_login();
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="<?= htmlspecialchars(todoer_csrf_token()) ?>">
 <title>Todoer &mdash; Prizes</title>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#3559b8">
 <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>

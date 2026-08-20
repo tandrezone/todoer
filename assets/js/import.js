@@ -6,6 +6,8 @@ function escapeHtml(str) {
 
 let candidates = []; // [{text, checked, source, include, list_type}]
 
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 const scanForm = document.getElementById('scan-form');
 const scanStatus = document.getElementById('scan-status');
 const preview = document.getElementById('preview');
@@ -51,7 +53,11 @@ scanForm.addEventListener('submit', async e => {
   commitStatus.textContent = '';
 
   try {
-    const res = await fetch('api/import.php', { method: 'POST', body: fd });
+    const res = await fetch('api/import.php', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': CSRF_TOKEN },
+      body: fd,
+    });
     const data = await res.json();
     if (!res.ok || data.ok === false) throw new Error(data.error || 'Scan failed.');
 
@@ -110,7 +116,7 @@ document.getElementById('commit-btn').addEventListener('click', async () => {
   try {
     const res = await fetch('api/import.php', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
       body: JSON.stringify({ action: 'commit', items }),
     });
     const data = await res.json();

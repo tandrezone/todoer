@@ -4,9 +4,11 @@ const STATUS_LABEL = { unassigned: 'Unassigned', open: 'In progress', done: 'Don
 
 let knownUserCount = 0;
 
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 async function jsonFetch(url, options = {}) {
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN },
     ...options,
   });
   const data = await res.json().catch(() => ({}));

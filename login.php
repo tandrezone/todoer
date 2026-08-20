@@ -10,16 +10,21 @@ $error = '';
 $mode = ($_POST['mode'] ?? 'login') === 'register' ? 'register' : 'login';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username = $_POST['username'] ?? '';
-    $password = $_POST['password'] ?? '';
-    if ($mode === 'register') {
-        [$ok, $error] = todoer_register($username, $password);
+    $postedToken = $_POST['csrf_token'] ?? '';
+    if (!hash_equals(todoer_csrf_token(), $postedToken)) {
+        $error = 'Your session expired. Please try again.';
     } else {
-        [$ok, $error] = todoer_login($username, $password);
-    }
-    if ($ok) {
-        header('Location: index.php');
-        exit;
+        $username = $_POST['username'] ?? '';
+        $password = $_POST['password'] ?? '';
+        if ($mode === 'register') {
+            [$ok, $error] = todoer_register($username, $password);
+        } else {
+            [$ok, $error] = todoer_login($username, $password);
+        }
+        if ($ok) {
+            header('Location: index.php');
+            exit;
+        }
     }
 }
 ?>
@@ -29,6 +34,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Todoer &mdash; sign in</title>
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<link rel="manifest" href="site.webmanifest">
+<meta name="theme-color" content="#3559b8">
 <link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body class="auth-body">
@@ -47,11 +57,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <form method="post" id="auth-form">
       <input type="hidden" name="mode" id="mode-field" value="<?= htmlspecialchars($mode) ?>">
+      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(todoer_csrf_token()) ?>">
       <label>Username
         <input type="text" name="username" required autofocus value="<?= htmlspecialchars($_POST['username'] ?? '') ?>">
       </label>
       <label>Password
-        <input type="password" name="password" required minlength="3">
+        <input type="password" name="password" required minlength="8">
       </label>
       <button type="submit" class="btn-primary" id="submit-btn"><?= $mode === 'register' ? 'Create account & join' : 'Log in' ?></button>
     </form>

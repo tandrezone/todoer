@@ -29,6 +29,7 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
+    todoer_require_csrf();
     $body = todoer_json_body();
     if (($body['action'] ?? '') === 'claim') {
         $awardId = (int) ($body['award_id'] ?? 0);

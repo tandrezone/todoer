@@ -6,8 +6,10 @@ function escapeHtml(str) {
 
 const MEDALS = { daily: '☀️', weekly: '📅', monthly: '🌕' };
 
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 async function jsonFetch(url, options = {}) {
-  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
+  const res = await fetch(url, { headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }, ...options });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.ok === false) throw new Error(data.error || 'Request failed');
   return data;

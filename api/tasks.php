@@ -61,6 +61,7 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
+    todoer_require_csrf();
     $body = todoer_json_body();
     $action = $body['action'] ?? '';
 

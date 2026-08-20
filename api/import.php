@@ -14,6 +14,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     todoer_fail('Method not allowed.', 405);
 }
 
+todoer_require_csrf();
+
 // --- Step 2: commit selected candidates as real tasks (JSON body) ---
 $isMultipart = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data');
 if (!$isMultipart) {
@@ -26,11 +28,18 @@ if (!$isMultipart) {
         todoer_fail('Nothing selected to import.');
     }
 
+    // Imported tasks land in the shared ANY_USER pool at MODERATE priority with no window/timer
+    // of their own -- matching api/tasks.php's 'add' defaults -- and created_by/status/etc. are
+    // set explicitly so this insert stays valid against the assignment-feature schema.
     $insert = $pdo->prepare(
-        'INSERT INTO tasks (user_id, list_type, period_key, title, points) VALUES (?, ?, ?, ?, ?)'
+        "INSERT INTO tasks
+            (user_id, created_by, list_type, period_key, title, points, status,
+             window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes)
+         VALUES (NULL, ?, ?, ?, ?, ?, 'unassigned', NULL, NULL, 'ANY_USER', NULL, 'MODERATE', NULL)"
     );
 
     $created = 0;
+    $createdIds = [];
     $pdo->beginTransaction();
     try {
         foreach ($items as $item) {
@@ -43,12 +52,19 @@ if (!$isMultipart) {
             $periodKey = todoer_period_key($listType);
             $points = TODOER_POINTS[$listType];
             $insert->execute([$user['id'], $listType, $periodKey, $title, $points]);
+            $createdIds[] = (int) $pdo->lastInsertId();
             $created++;
         }
         $pdo->commit();
     } catch (Throwable $e) {
         $pdo->rollBack();
         throw $e;
+    }
+
+    // If a given period's game is already running, don't strand these as 'unassigned' until the
+    // next manual Start -- same backstop api/tasks.php's 'add' action relies on.
+    foreach ($createdIds as $taskId) {
+        todoer_maybe_assign_new_task($pdo, $taskId);
     }
 
     todoer_respond(['ok' => true, 'created' => $created]);
