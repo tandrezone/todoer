@@ -148,6 +148,9 @@ form input[type=text], form input[type=password] {
 .list-card.is-running .task-del {
   display: none;
 }
+.list-card.is-running .task-edit {
+  display: none;
+}
 .unassigned-hint { color: var(--warn); background: var(--warn-bg); border: 1px solid #f2d9a3; border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: 0 0 10px; }
 
 .task-list { list-style: none; margin: 0 0 12px; padding: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }
@@ -160,6 +163,8 @@ form input[type=text], form input[type=password] {
 .task-window { font-variant-numeric: tabular-nums; }
 .task-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
 .task-del:hover { color: var(--danger); }
+.task-edit { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
+.task-edit:hover { color: var(--accent); }
 .empty-hint { color: var(--muted); font-size: 13px; padding: 10px 2px; }
 
 /* Shared "chip" look for every small status/label pill in the app, so priority, task-status,
@@ -240,6 +245,18 @@ form input[type=text], form input[type=password] {
 .notification { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 12px; color: var(--ink); background: var(--accent-bg); border: 1px solid #c9d9ff; border-radius: var(--radius-sm); font-size: 13px; }
 .notification span { color: var(--muted); }
 @media (max-width: 860px) { .notification-slot { padding: 0 16px; } }
+
+.task-edit-dialog { width: min(560px, calc(100% - 32px)); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0; color: var(--ink); }
+.task-edit-dialog::backdrop { background: rgba(28, 35, 51, 0.4); }
+.task-edit-dialog form { padding: 20px; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.dialog-head h2 { margin: 0; font-size: 18px; }
+.dialog-close { border: none; background: none; color: var(--muted); font-size: 24px; cursor: pointer; line-height: 1; }
+.task-edit-dialog label { margin-bottom: 12px; }
+.task-edit-dialog input, .task-edit-dialog select { width: 100%; margin-top: 6px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.dialog-actions button { border: 1px solid var(--border); background: var(--card); color: var(--ink); border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font-weight: 600; }
+.dialog-actions .dialog-save { border-color: var(--accent); background: var(--accent); color: white; }
 
 /* ---------- Prizes page ---------- */
 .prizes-page { max-width: 760px; margin: 0 auto; padding: 24px; }

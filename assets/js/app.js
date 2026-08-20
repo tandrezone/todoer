@@ -3,6 +3,7 @@ const PRIORITY_LABEL = { HIGH: 'High', MODERATE: 'Moderate', LOW: 'Low' };
 const STATUS_LABEL = { unassigned: 'Unassigned', open: 'In progress', done: 'Done', expired: 'Missed' };
 
 let knownUserCount = 0;
+const taskCache = new Map();
 
 const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
@@ -93,7 +94,7 @@ function priorityBadgeHtml(priority) {
 }
 
 function populateUserSelects(users) {
-  document.querySelectorAll('.specific-user-select').forEach(select => {
+  document.querySelectorAll('.specific-user-select, .edit-specific-user-select').forEach(select => {
     select.innerHTML = users.map(u => `<option value="${u.id}">${escapeHtml(u.username)}</option>`).join('');
   });
 }
@@ -101,6 +102,7 @@ function populateUserSelects(users) {
 async function loadTasks() {
   const data = await jsonFetch('api/tasks.php');
   renderNotifications(data.notifications || []);
+  taskCache.clear();
 
   if (data.users.length !== knownUserCount) {
     knownUserCount = data.users.length;
@@ -137,6 +139,7 @@ async function loadTasks() {
         : '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
     }
     info.items.forEach(task => {
+      taskCache.set(String(task.id), { ...task, listType: type });
       const li = document.createElement('li');
       li.className = 'task-item' + (task.status === 'done' ? ' done' : '');
       const meta = [];
@@ -158,6 +161,7 @@ async function loadTasks() {
         </span>
         ${priorityBadgeHtml(task.priority)}
         <span class="chip task-points">+${task.points}</span>
+        <button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>
         <button class="task-del" data-del-id="${task.id}" title="Delete">&times;</button>
       `;
       listEl.appendChild(li);
@@ -171,6 +175,7 @@ async function loadTasks() {
       boardList.innerHTML = '<li class="empty-hint">No tasks in this period yet.</li>';
     }
     info.board.forEach(task => {
+      taskCache.set(String(task.id), { ...task, listType: type });
       const li = document.createElement('li');
       li.className = 'board-task-row';
       const holder = task.holder_username
@@ -187,10 +192,72 @@ async function loadTasks() {
         ${windowHtml}
         ${priorityBadgeHtml(task.priority)}
         <span class="board-holder">${holder}</span>
+        ${task.can_edit ? `<button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>` : ''}
       `;
       boardList.appendChild(li);
     });
   });
+}
+
+function setEditWindowFields(form, task) {
+  const type = task.listType;
+  form.querySelectorAll('[class*="edit-window-"]').forEach(field => { field.hidden = true; });
+  if (type === 'daily') {
+    form.querySelector('.edit-window-daily').hidden = false;
+    form.querySelectorAll('.edit-window-daily')[1].hidden = false;
+    form.elements.window_start_time.value = task.window_start ? task.window_start.slice(11, 16) : '';
+    form.elements.window_end_time.value = task.window_end ? task.window_end.slice(11, 16) : '';
+  } else if (type === 'weekly') {
+    form.querySelectorAll('.edit-window-weekly').forEach(field => { field.hidden = false; });
+    const start = task.window_start ? new Date(task.window_start.replace(' ', 'T')).getDay() : '';
+    const end = task.window_end ? new Date(task.window_end.replace(' ', 'T')).getDay() : '';
+    form.elements.window_start_day.value = start === '' ? '' : String(start === 0 ? 7 : start);
+    form.elements.window_end_day.value = end === '' ? '' : String(end === 0 ? 7 : end);
+  } else {
+    form.querySelectorAll('.edit-window-monthly').forEach(field => { field.hidden = false; });
+    form.elements.window_start_dom.value = task.window_start ? String(Number(task.window_start.slice(8, 10))) : '';
+    form.elements.window_end_dom.value = task.window_end ? String(Number(task.window_end.slice(8, 10))) : '';
+  }
+}
+
+function openTaskEditor(task) {
+  const dialog = document.getElementById('task-edit-dialog');
+  const form = document.getElementById('task-edit-form');
+  form.reset();
+  form.elements.task_id.value = task.id;
+  form.elements.list_type.value = task.listType;
+  form.elements.title.value = task.title;
+  form.elements.assigned_type.value = task.assigned_type;
+  form.elements.assigned_user_id.value = task.assigned_user_id || '';
+  form.elements.priority.value = task.priority;
+  form.elements.time_limit_minutes.value = task.time_limit_minutes || '';
+  form.querySelector('.edit-specific-user-field').hidden = task.assigned_type !== 'SPECIFIC_USER';
+  form.querySelector('.edit-time-limit-field').classList.toggle('disabled-field', task.priority === 'HIGH');
+  form.elements.time_limit_minutes.disabled = task.priority === 'HIGH';
+  setEditWindowFields(form, task);
+  dialog.showModal();
+}
+
+async function saveTaskEdit(form) {
+  const type = form.elements.list_type.value;
+  const payload = {
+    action: 'edit', task_id: form.elements.task_id.value, title: form.elements.title.value.trim(),
+    assigned_type: form.elements.assigned_type.value, assigned_user_id: form.elements.assigned_user_id.value,
+    priority: form.elements.priority.value, time_limit_minutes: form.elements.time_limit_minutes.value || null,
+  };
+  if (type === 'daily') {
+    payload.window_start_time = form.elements.window_start_time.value || null;
+    payload.window_end_time = form.elements.window_end_time.value || null;
+  } else if (type === 'weekly') {
+    payload.window_start_day = form.elements.window_start_day.value || null;
+    payload.window_end_day = form.elements.window_end_day.value || null;
+  } else {
+    payload.window_start_dom = form.elements.window_start_dom.value || null;
+    payload.window_end_dom = form.elements.window_end_dom.value || null;
+  }
+  await jsonFetch('api/tasks.php', { method: 'POST', body: JSON.stringify(payload) });
+  document.getElementById('task-edit-dialog').close();
+  await loadTasks();
 }
 
 function renderNotifications(notifications) {
@@ -344,6 +411,11 @@ function bindListEvents() {
   });
 
   document.querySelector('.lists').addEventListener('click', async e => {
+    if (e.target.matches('[data-edit-id]')) {
+      const task = taskCache.get(String(e.target.dataset.editId));
+      if (task) openTaskEditor(task);
+      return;
+    }
     if (e.target.matches('[data-del-id]')) {
       const taskId = e.target.dataset.delId;
       if (!confirm('Delete this task?')) return;
@@ -379,6 +451,26 @@ function bindListEvents() {
         e.target.disabled = false;
       }
     }
+  });
+
+  document.querySelectorAll('[data-close-edit]').forEach(button => {
+    button.addEventListener('click', () => document.getElementById('task-edit-dialog').close());
+  });
+  document.getElementById('task-edit-form').addEventListener('change', e => {
+    const form = e.currentTarget;
+    if (e.target.matches('.edit-assigned-type-select')) {
+      form.querySelector('.edit-specific-user-field').hidden = e.target.value !== 'SPECIFIC_USER';
+    }
+    if (e.target.matches('.edit-priority-select')) {
+      const isHigh = e.target.value === 'HIGH';
+      form.querySelector('.edit-time-limit-field').classList.toggle('disabled-field', isHigh);
+      form.elements.time_limit_minutes.disabled = isHigh;
+    }
+  });
+  document.getElementById('task-edit-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const form = e.currentTarget;
+    try { await saveTaskEdit(form); } catch (err) { alert(err.message); }
   });
 }
 

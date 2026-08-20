@@ -135,6 +135,71 @@ $jsV = @filemtime(__DIR__ . '/assets/js/app.js') ?: time();
   </aside>
 </main>
 
+<dialog id="task-edit-dialog" class="task-edit-dialog">
+  <form method="dialog" id="task-edit-form">
+    <div class="dialog-head">
+      <h2>Edit task</h2>
+      <button type="button" class="dialog-close" data-close-edit title="Close">&times;</button>
+    </div>
+    <input type="hidden" name="task_id">
+    <input type="hidden" name="list_type">
+    <label>Task name
+      <input type="text" name="title" required maxlength="200">
+    </label>
+    <div class="task-options-grid">
+      <label>Assign to
+        <select name="assigned_type" class="edit-assigned-type-select">
+          <option value="ANY_USER">Anyone (shared pool)</option>
+          <option value="SPECIFIC_USER">A specific person</option>
+        </select>
+      </label>
+      <label class="edit-specific-user-field">Person
+        <select name="assigned_user_id" class="edit-specific-user-select"></select>
+      </label>
+      <label>Priority
+        <select name="priority" class="edit-priority-select">
+          <option value="LOW">Low</option>
+          <option value="MODERATE">Moderate</option>
+          <option value="HIGH">High (short timer)</option>
+        </select>
+      </label>
+      <label class="edit-time-limit-field">Time limit once assigned (minutes)
+        <input type="number" name="time_limit_minutes" min="1" placeholder="no timer">
+      </label>
+      <label class="edit-window-daily">Window start (time of day)
+        <input type="time" name="window_start_time">
+      </label>
+      <label class="edit-window-daily">Window end (time of day)
+        <input type="time" name="window_end_time">
+      </label>
+      <label class="edit-window-weekly">Window start (day)
+        <select name="window_start_day">
+          <option value="">&mdash;</option><option value="1">Monday</option><option value="2">Tuesday</option>
+          <option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option>
+          <option value="6">Saturday</option><option value="7">Sunday</option>
+        </select>
+      </label>
+      <label class="edit-window-weekly">Window end (day)
+        <select name="window_end_day">
+          <option value="">&mdash;</option><option value="1">Monday</option><option value="2">Tuesday</option>
+          <option value="3">Wednesday</option><option value="4">Thursday</option><option value="5">Friday</option>
+          <option value="6">Saturday</option><option value="7">Sunday</option>
+        </select>
+      </label>
+      <label class="edit-window-monthly">Window start (day of month)
+        <input type="number" name="window_start_dom" min="1" max="31">
+      </label>
+      <label class="edit-window-monthly">Window end (day of month)
+        <input type="number" name="window_end_dom" min="1" max="31">
+      </label>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" data-close-edit>Cancel</button>
+      <button type="submit" class="dialog-save">Save changes</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="assets/js/app.js?v=<?= $jsV ?>"></script>
 </body>
 </html>

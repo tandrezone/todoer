@@ -53,7 +53,11 @@ if ($method === 'GET') {
             'running' => $running,
             'unassigned_count' => (int) $unassignedCount->fetchColumn(),
             'items' => $items,
-            'board' => $boardStmt->fetchAll(),
+            'board' => array_map(function (array $task) use ($user): array {
+                $task['can_edit'] = (int) $task['user_id'] === (int) $user['id']
+                    || (int) $task['created_by'] === (int) $user['id'];
+                return $task;
+            }, $boardStmt->fetchAll()),
         ];
     }
 
@@ -199,6 +203,73 @@ if ($method === 'POST') {
         }
         $del = $pdo->prepare('DELETE FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
         $del->execute([$taskId, $user['id'], $user['id']]);
+        todoer_respond(['ok' => true]);
+    }
+
+    if ($action === 'edit') {
+        $taskId = (int) ($body['task_id'] ?? 0);
+        $stmt = $pdo->prepare('SELECT * FROM tasks WHERE id = ? AND (user_id = ? OR created_by = ?)');
+        $stmt->execute([$taskId, $user['id'], $user['id']]);
+        $task = $stmt->fetch();
+        if (!$task) {
+            todoer_fail('Task not found.', 404);
+        }
+        if (todoer_is_game_running($pdo, $task['list_type'], $task['period_key'])) {
+            todoer_fail('This list is running -- stop it before editing tasks.');
+        }
+
+        $title = trim($body['title'] ?? '');
+        if ($title === '') {
+            todoer_fail('Task title cannot be empty.');
+        }
+
+        $assignedType = ($body['assigned_type'] ?? 'ANY_USER') === 'SPECIFIC_USER' ? 'SPECIFIC_USER' : 'ANY_USER';
+        $assignedUserId = null;
+        if ($assignedType === 'SPECIFIC_USER') {
+            $assignedUserId = (int) ($body['assigned_user_id'] ?? 0);
+            $check = $pdo->prepare('SELECT 1 FROM users WHERE id = ?');
+            $check->execute([$assignedUserId]);
+            if (!$check->fetchColumn()) {
+                todoer_fail('Choose a valid person to lock this task to.');
+            }
+        }
+
+        $priority = in_array($body['priority'] ?? '', TODOER_PRIORITIES, true) ? $body['priority'] : 'MODERATE';
+        $timeLimitMinutes = null;
+        if ($priority !== 'HIGH' && isset($body['time_limit_minutes']) && $body['time_limit_minutes'] !== '') {
+            $timeLimitMinutes = max(1, (int) $body['time_limit_minutes']);
+        }
+
+        $periodKey = $task['period_key'];
+        if ($task['list_type'] === 'daily') {
+            $windowStart = todoer_period_window_datetime('daily', $periodKey, $body['window_start_time'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('daily', $periodKey, $body['window_end_time'] ?? null, true);
+        } elseif ($task['list_type'] === 'weekly') {
+            $windowStart = todoer_period_window_datetime('weekly', $periodKey, $body['window_start_day'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('weekly', $periodKey, $body['window_end_day'] ?? null, true);
+        } else {
+            $windowStart = todoer_period_window_datetime('monthly', $periodKey, $body['window_start_dom'] ?? null, false);
+            $windowEnd = todoer_period_window_datetime('monthly', $periodKey, $body['window_end_dom'] ?? null, true);
+        }
+        if ($windowStart !== null && $windowEnd !== null && $windowStart > $windowEnd) {
+            todoer_fail('Window start must be before window end.');
+        }
+
+        $assignmentChanged = $assignedType !== $task['assigned_type']
+            || (int) $assignedUserId !== (int) $task['assigned_user_id'];
+        if ($assignmentChanged) {
+            $update = $pdo->prepare(
+                "UPDATE tasks SET title = ?, assigned_type = ?, assigned_user_id = ?, priority = ?,
+                 time_limit_minutes = ?, window_start = ?, window_end = ?, user_id = NULL,
+                 status = 'unassigned', assigned_at = NULL, completed_at = NULL WHERE id = ?"
+            );
+            $update->execute([$title, $assignedType, $assignedUserId, $priority, $timeLimitMinutes, $windowStart, $windowEnd, $taskId]);
+        } else {
+            $update = $pdo->prepare(
+                'UPDATE tasks SET title = ?, priority = ?, time_limit_minutes = ?, window_start = ?, window_end = ? WHERE id = ?'
+            );
+            $update->execute([$title, $priority, $timeLimitMinutes, $windowStart, $windowEnd, $taskId]);
+        }
         todoer_respond(['ok' => true]);
     }
 
