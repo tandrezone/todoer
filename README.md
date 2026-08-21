@@ -8,25 +8,44 @@ a pool of 20 real-life rewards.
 
 ## Stack
 
-Plain PHP 8+ (no framework), SQLite (via PDO), HTML/CSS/vanilla JS. No build step,
-no dependencies to install.
+PHP 8.1+ in a small MVC application of its own (no framework), SQLite via PDO,
+HTML/CSS/vanilla JS with no build step. Composer is used for the PSR-7/PSR-17 HTTP
+message implementation and Web Push; see `docs/ARCHITECTURE.md` for the layout and
+the design rules.
 
 ## How to run it
 
-You need PHP with the `pdo_sqlite` extension (bundled with PHP on most systems).
+You need PHP with the `pdo_sqlite` extension (bundled with PHP on most systems) and
+Composer.
 
 ```
 cd todoer
-php -S 0.0.0.0:8080
+composer install
+php -S 0.0.0.0:8080 -t public public/index.php
 ```
 
-Then open `http://localhost:8080/login.php` in a browser. Using `0.0.0.0` instead
-of `127.0.0.1` lets other players on the same Wi-Fi/LAN open
-`http://<your-computer's-IP>:8080/login.php` on their own phone or laptop and
-join with their own account — that's the "join 2+ persons" part.
+Then open `http://localhost:8080/login` in a browser. Using `0.0.0.0` instead of
+`127.0.0.1` lets other players on the same Wi-Fi/LAN open
+`http://<your-computer's-IP>:8080/login` on their own phone or laptop and join with
+their own account — that's the "join 2+ persons" part.
 
-On first run it creates `data/todoer.sqlite` automatically and seeds the 20-prize
-pool. Nothing else to configure.
+`public/` is the only directory that should ever be web-exposed: the database, the
+Web Push keys and the application code all live outside it. On first run the app
+creates `data/todoer.sqlite`, applies the schema (and any migrations an older
+database needs) and seeds the 20-prize pool. Nothing else to configure.
+
+Behind Apache or Nginx, point the document root at `todoer/public` and send
+everything that is not a real file to `public/index.php` — the bundled
+`public/.htaccess` already does this for Apache. Serving the app from a
+sub-directory (`http://nas.local/todoer/`) needs no configuration: the base path is
+detected per request and the front-end reads it from a `<meta name="base-path">` tag.
+
+The smoke tests exercise the whole stack -- routing, CSRF, group scoping, the
+assignment engine, prize draws -- against a temporary database:
+
+```
+php tests/smoke.php
+```
 
 ### Web Push notifications
 
@@ -77,7 +96,6 @@ tasks can I see, and who am I competing against":
 - Anyone can join a group themselves with its **invite code** — on the Join form
   at sign-up, or from the Group page later. Joining moves you out of your current
   group, since membership is one group at a time.
-- The admin also owns the **Start/Stop** control on each list (see below).
 - Inside a group, everyone sees everything: all members' tasks on the team board,
   the same daily/weekly/monthly lists, the same leaderboard, the same prize
   history.
@@ -94,7 +112,8 @@ Scoping is enforced server-side, not in the UI: the group is resolved from your
 session membership on every request (never from anything the client sends), every
 task/leaderboard/prize/award query is filtered by `group_id`, and cross-user
 references (like locking a task to a specific person) are rejected unless that
-person is in your group. See `includes/groups.php`.
+person is in your group. See `src/Service/GroupService.php` and the middleware in
+`src/Http/Middleware/AuthenticationMiddleware.php`.
 
 ## How the game works
 
@@ -116,39 +135,9 @@ person is in your group. See `includes/groups.php`.
   are calculated. Notifications are stored, delivered on the next dashboard visit, and sent only once
   per event.
 
-## When each list is open
-
-Every list runs on a fixed window, and nothing can be ticked off outside it:
-
-| List | Opens | Closes |
-| --- | --- | --- |
-| Daily | 06:30 that day | 23:59 that day |
-| Weekly | Monday 06:30 | Sunday 23:59 |
-| Monthly | 06:30 on the 1st | 23:59 on the last day of the month |
-
-- A task added without a window of its own **inherits the period's**, so every task has one.
-- A task can be *tighter* than its period ("dishes between 18:00 and 20:00") but never wider: a
-  window reaching outside the period is clamped back to 06:30 / 23:59.
-- The window applies to the holder too, not just to someone taking a task over — nothing is
-  tickable before the list opens or after it closes.
-- When the window closes, anything unfinished is **missed**. It isn't passed to another player,
-  because a new holder couldn't beat a deadline that has already gone.
-- A per-task countdown (a time limit, or HIGH priority) still hands the task on mid-window as
-  before; only the window itself ends the task's life.
-
-These are wall-clock times, so the app pins its own timezone rather than inheriting the server's
-(which is usually UTC — 06:30 UTC would be 07:30 on a British summer morning). It defaults to
-`Europe/London`; set `TODOER_TIMEZONE` or change `TODOER_DEFAULT_TIMEZONE` in
-`includes/bootstrap.php` if your group is elsewhere.
-
 ## Game mode: the shared board
 
-Pressing **Start** on a list puts it in game mode. **Only the group admin has the Start/Stop
-button** — starting deals out everyone's tasks and stopping unlocks editing for the whole group,
-so it's the admin's call. Members see the list and play; if a list hasn't been started yet, they
-get told the admin starts it. The rule is enforced by the API, not just hidden in the page.
-
-While a list is running:
+Pressing **Start** on a list puts it in game mode. While a list is running:
 
 - Adding, editing and deleting are locked; the list becomes the board you play on.
 - The list shows **every** task in that period, not just yours, with **your own tasks at the
@@ -161,7 +150,6 @@ While a list is running:
   one" rather than a double completion.
 - A task **locked to a specific person** is never up for grabs, and a task whose window hasn't
   opened yet (or has already closed) can't be taken either. The row says which of those it is.
-- Nothing is up for grabs while a list is stopped — that's planning time, not play.
 - Whoever lost the task gets a notification naming who took it and how many points went with it
   (in-app, plus a push notification if they've enabled it).
 - Un-ticking a task you took over hands it back to the person you took it from, rather than
@@ -177,8 +165,8 @@ Each task can carry, in addition to its title:
   `SPECIFIC_USER` (locked to one designated player from the moment it's
   created).
 - **Priority**: `HIGH`, `MODERATE`, or `LOW`. `HIGH` tasks always use a short,
-  fixed completion timer (`TODOER_HIGH_PRIORITY_TIME_LIMIT_MINUTES` in
-  `includes/assignment.php`, 30 minutes by default) instead of whatever
+  fixed completion timer (`Priority::HIGH_PRIORITY_TIME_LIMIT_MINUTES` in
+  `src/Domain/Enum/Priority.php`, 30 minutes by default) instead of whatever
   per-task timer was set, and that timer restarts fresh for whoever it gets
   handed to.
 - **Time limit** (minutes): an optional per-task timer that starts counting
@@ -208,8 +196,8 @@ awards its prize right away rather than waiting for the clock — the "Daily
 Game: ends when all daily tasks are completed" rule from the spec.
 
 Users can be marked inactive (`users.active = 0`) to exclude them from
-distribution and reassignment — there's no UI for this yet; toggle it directly
-in `data/todoer.sqlite` if someone is sitting a period out.
+distribution and reassignment — there's no UI for this yet; toggle it directly in
+`data/todoer.sqlite` if someone is sitting a period out.
 
 ## Importing tasks from Google Keep
 
@@ -233,17 +221,17 @@ a Google Takeout export instead:
    always land as open/incomplete regardless of their Keep state, so points
    are only ever earned by finishing them inside Todoer.
 
-This is handled by `import.php` (page), `assets/js/import.js` (scan/preview/
-commit flow), `api/import.php` (upload parsing + bulk insert), and
-`includes/keep_import.php` (the actual Keep JSON parsing). If the server's
+This is handled by the `/import` page, `assets/js/import.js` (scan/preview/commit
+flow), `POST /api/import/keep/scan` and `POST /api/import/keep/commit`
+(`src/Controller/Api/`), and `src/Service/KeepImportService.php` (the actual Keep
+JSON parsing). If the server's
 PHP doesn't have the `zip` extension, `.zip` uploads fail with a clear message
 telling you to upload the extracted `.json` files instead — that path always
 works since it doesn't touch ZipArchive at all.
 
 ## The prize pool
 
-Edit the list in `includes/db.php` (inside the `todoer_db()` seeding block) to
-change the 20 prizes — things like "1 hour of uninterrupted rest", "a 20-minute
+Edit the list in `src/Domain/Prize/PrizePool.php` to change the 20 prizes — things like "1 hour of uninterrupted rest", "a 20-minute
 massage from the runner-up", "pick the next movie night", "skip a chore", etc.
 Edits there only affect brand-new installs (a fresh `data/todoer.sqlite`); to
 change the pool on an existing install, edit the `prizes` table directly, e.g.
@@ -253,37 +241,57 @@ with a one-off `php -r` script using PDO.
 
 ```
 todoer/
-  index.php            dashboard: lists + leaderboard
-  login.php            sign in / join (optionally with a group invite code)
-  group.php            group page: members, add/remove, invite code, join/leave
-  prizes.php           prize history + claim button
-  import.php           Google Keep import page
-  logout.php
-  includes/
-    schema.sql         SQLite schema
-    db.php             DB bootstrap + prize seeding + old-install migration (incl. groups)
-    auth.php           register/login/session helpers
-    groups.php         group membership, admin actions, invite codes — the privacy boundary
-    period.php         period keys, auto-close + prize award logic, leaderboards
-    assignment.php      distribution on Start, view ordering, expiration/reassignment sweep
-    api_helpers.php     JSON request/response helpers
-    bootstrap.php       wires the above together, runs the expiration sweep + period auto-close
-    keep_import.php     parses Google Takeout Keep .json/.zip exports
-  api/
-    tasks.php           list mine/board, add, start, complete/reopen/delete tasks (JSON)
-    leaderboard.php      leaderboard data (JSON)
-    prizes.php           prize history + claim (JSON)
-    group.php            group members + admin actions (JSON)
-    import.php           Keep upload parsing (step 1) + bulk task insert (step 2)
-  assets/
-    css/style.css
-    js/app.js            dashboard behaviour
-    js/group.js           group page behaviour
-    js/prizes.js          prizes page behaviour
-    js/import.js          Keep import scan/preview/commit flow
-  data/
-    todoer.sqlite         created automatically on first run
+  public/                     the only web-exposed directory
+    index.php                 front controller (also the router script for `php -S`)
+    .htaccess                 Apache rewrite + a couple of headers
+    assets/                   css, js, icons
+    service-worker.js         push notifications
+    site.webmanifest
+  config/
+    settings.php              paths, database, session, push -- the whole installation config
+    container.php             the wiring: every service and its dependencies, in one file
+    routes.php                the route table, with its per-route auth guards
+  src/
+    Application.php           boots the container, turns a PSR-7 request into a response
+    Container/                a small explicit PSR-11 container
+    Http/                     router, PSR-15 pipeline, middleware, responder, request input
+    Session/                  session interface + PHP and in-memory implementations, CSRF tokens
+    Controller/Web/           the pages (dashboard, sign-in, group, prizes, import, backup)
+    Controller/Api/           the JSON endpoints
+    Service/                  the application/game logic (see below)
+    Domain/                   entities, enums, periods -- the rules that need no database
+    Repository/               one class per table: every SQL statement in the app lives here
+    Database/                 connection, migrations, invite codes, transactions
+    View/                     the template renderer
+    Support/                  clock, logger
+    Exception/                validation / auth / not-found / conflict, each with its status code
+  templates/                  HTML with the minimum possible PHP in it
+  database/schema.sql         SQLite schema
+  tests/smoke.php             end-to-end tests over the real stack
+  data/todoer.sqlite          created automatically on first run (outside the web root)
 ```
+
+The services are where the game lives: `AssignmentService` (distribution on Start,
+the expiry/reassignment sweep), `PeriodService` (closing a period, crowning a winner,
+drawing a prize), `TaskService` (add/edit/complete/steal), `TaskBoardService` (the
+dashboard payload and its ordering rules), `GroupService` (membership, invites,
+admin), `NotificationService` + `PushService`, `KeepImportService`,
+`TaskImportService`, `TaskExportService`, `LeaderboardService`, `PrizeService` and
+`MaintenanceService` (the per-request bookkeeping sweep).
+
+### URLs
+
+| Page | | API | |
+| --- | --- | --- | --- |
+| `/` | dashboard | `GET/POST /api/tasks` | board payload; add/edit/delete/start/stop/complete/reopen |
+| `/login` | sign in or join | `GET /api/leaderboard` | standings |
+| `/group` | members, invite code | `GET/POST /api/group` | group view + admin actions |
+| `/prizes` | prize history | `GET/POST /api/prizes` | history + claim |
+| `/import` | Keep import | `POST /api/import/keep/scan` | parse an upload into candidates |
+| `/backup` | export / restore | `POST /api/import/keep/commit` | commit picked candidates |
+| `POST /logout` | sign out | `GET/POST /api/notifications` | push key + subscribe/unsubscribe |
+| | | `GET /api/export/tasks` | download this group's tasks |
+| | | `POST /api/import/tasks` | restore from an export |
 
 ## Notes / things you might want to change later
 
@@ -292,8 +300,6 @@ todoer/
 - Tasks are a shared pool per period rather than private lists — everyone *in
   your group* can see and add to the same daily/weekly/monthly board, and the
   "Team board" panel on each list shows who currently holds what.
-- Upgrading a database that predates the fixed windows backfills every task with the window its
-  period implies (06:30 to 23:59), so old tasks play by the same rule as new ones.
 - Upgrading a database that predates groups folds the whole install into a single
   group named "Our group" (the first registered user becomes its admin), which
   keeps every existing task, score and prize exactly where it was. The prize
@@ -301,5 +307,6 @@ todoer/
   new group still has the full list of prizes to work through.
 - Ties for a period split the prize randomly between the tied top scorers
   rather than awarding it to both — easy to change in
-  `todoer_close_one_period()` in `includes/period.php` if you'd rather award
-  every tied winner.
+  `PeriodService::closePeriod()` if you'd rather award every tied winner.
+- Users can still be marked inactive by hand (`users.active = 0`) to sit a period
+  out; there is no UI for it yet.
