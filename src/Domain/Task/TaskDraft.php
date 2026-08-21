@@ -29,7 +29,15 @@ final class TaskDraft
         public readonly Priority $priority,
         public readonly ?int $timeLimitMinutes,
         public readonly ?string $windowStart,
-        public readonly ?string $windowEnd
+        public readonly ?string $windowEnd,
+        /**
+         * How many equal slices this task's periodicity is divided into ("times per period"). 1
+         * means the ordinary single-window task; N > 1 means N occurrences, each live only in its
+         * own 1/N slice of the period (see App\Domain\Period\Period::divideIntoWindows()).
+         */
+        public readonly int $occurrenceCount = 1,
+        /** Which of those $occurrenceCount slices this particular draft/row is. 1-based. */
+        public readonly int $occurrenceIndex = 1
     ) {
     }
 
@@ -38,5 +46,27 @@ final class TaskDraft
     {
         return $this->assignmentType !== $task->assignmentType
             || $this->assignedUserId !== $task->assignedUserId;
+    }
+
+    /**
+     * An immutable copy carrying one resolved occurrence's window and slot number -- what
+     * App\Service\TaskService builds, one per slice from Period::divideIntoWindows(), before
+     * handing each off to the repository.
+     */
+    public function withWindow(?string $windowStart, ?string $windowEnd, int $occurrenceIndex): self
+    {
+        return new self(
+            $this->listType,
+            $this->period,
+            $this->title,
+            $this->assignmentType,
+            $this->assignedUserId,
+            $this->priority,
+            $this->timeLimitMinutes,
+            $windowStart,
+            $windowEnd,
+            $this->occurrenceCount,
+            $occurrenceIndex
+        );
     }
 }

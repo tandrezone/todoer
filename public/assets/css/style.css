@@ -20,6 +20,10 @@
 }
 
 * { box-sizing: border-box; }
+/* A handful of elements toggle visibility via the `hidden` attribute while also carrying a class
+   that sets `display` (e.g. `.task-options-grid label { display: flex }`) -- without this, that
+   `display` would win over the attribute and the element would stay laid out. */
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -115,8 +119,7 @@ form input[type=text], form input[type=password] {
   .layout { grid-template-columns: 1fr; padding: 16px; }
 }
 
-.lists { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-@media (max-width: 860px) { .lists { grid-template-columns: 1fr; } }
+.lists { display: grid; grid-template-columns: 1fr; gap: 16px; }
 
 .list-card {
   background: var(--card);
@@ -130,28 +133,29 @@ form input[type=text], form input[type=password] {
 .list-card-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; gap: 10px; }
 .list-card-head h2 { margin: 0; font-size: 16px; }
 .list-card-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* One pill per periodicity (daily/weekly/monthly): its own period label, Start/Stop and
+   unassigned hint. Daily/weekly/monthly keep separate scoring, Start/Stop and period-close
+   underneath (see App\Service\PeriodService) even though the task list itself is one merged
+   list now, so each still needs its own tiny control. */
+.period-pills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+@media (max-width: 640px) { .period-pills { grid-template-columns: 1fr; } }
+.period-pill {
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px;
+  background: var(--bg);
+}
+.period-pill-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.period-pill-label { font-weight: 700; font-size: 13px; }
 .period-label { color: var(--muted); font-size: 12px; }
 .start-btn {
   border: 1px solid var(--border); background: var(--card); color: var(--muted);
   border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .start-btn:hover { border-color: var(--accent); color: var(--accent); }
-.list-card.is-running .start-btn { border-color: var(--good); color: var(--good); background: var(--good-bg); }
-.list-card.is-running .start-btn:hover { background: var(--good); color: white; }
-
-/* Running locks a list down to just the task list + checkboxes -- no adding, assigning, or
-   deleting until it's stopped again. */
-.list-card.is-running .add-task-form,
-.list-card.is-running .team-board {
-  display: none;
-}
-.list-card.is-running .task-del {
-  display: none;
-}
-.list-card.is-running .task-edit {
-  display: none;
-}
-.unassigned-hint { color: var(--warn); background: var(--warn-bg); border: 1px solid #f2d9a3; border-radius: var(--radius-sm); padding: 6px 10px; font-size: 12px; margin: 0 0 10px; }
+.period-pill.is-running { border-color: var(--good); background: var(--good-bg); }
+.period-pill.is-running .start-btn { border-color: var(--good); color: var(--good); background: var(--card); }
+.period-pill.is-running .start-btn:hover { background: var(--good); color: white; }
+.unassigned-hint { color: var(--warn); background: var(--warn-bg); border: 1px solid #f2d9a3; border-radius: var(--radius-sm); padding: 4px 8px; font-size: 11px; margin: 6px 0 0; }
 
 .task-list { list-style: none; margin: 0 0 12px; padding: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }
 .task-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg); font-size: 14px; }
@@ -181,6 +185,9 @@ form input[type=text], form input[type=password] {
 .status-chip.status-open { color: var(--accent); background: var(--accent-bg); }
 .status-chip.status-done { color: var(--good); background: var(--good-bg); }
 .status-chip.status-expired { color: var(--danger); background: var(--danger-bg); }
+.origin-badge { color: var(--muted); background: var(--bg); border: 1px solid var(--border); }
+/* Which slice of an N-times-per-period task this row is, e.g. "2/4". */
+.occurrence-hint { color: var(--accent); font-weight: 700; }
 
 .add-task-form { display: flex; flex-direction: column; gap: 8px; }
 .add-task-row { display: flex; gap: 6px; }
@@ -189,6 +196,13 @@ form input[type=text], form input[type=password] {
   border: none; background: var(--accent); color: white; border-radius: var(--radius-sm);
   width: 36px; font-size: 18px; cursor: pointer;
 }
+.add-task-row-secondary { flex-wrap: wrap; gap: 12px 16px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.add-task-row-secondary label { display: flex; flex-direction: column; gap: 4px; }
+.repeats-field select, .times-field input {
+  font-weight: 400; font-family: inherit; color: var(--ink);
+  padding: 7px 9px; border-radius: var(--radius-sm); border: 1px solid var(--border); font-size: 13px;
+}
+.times-field { max-width: 220px; }
 
 .task-options { font-size: 12px; color: var(--muted); }
 .task-options summary { cursor: pointer; font-weight: 600; margin-bottom: 10px; }

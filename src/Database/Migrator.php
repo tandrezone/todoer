@@ -37,6 +37,7 @@ final class Migrator
         $this->ensureTaskAssignmentColumns();
         $this->ensureGroupScoping();
         $this->ensureGameStartsRunningColumn();
+        $this->ensureTaskOccurrenceColumns();
         $this->seedPrizePool();
     }
 
@@ -165,6 +166,8 @@ final class Migrator
             assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
             priority TEXT NOT NULL DEFAULT 'MODERATE' CHECK (priority IN ('HIGH','MODERATE','LOW')),
             time_limit_minutes INTEGER,
+            occurrence_index INTEGER NOT NULL DEFAULT 1,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
             assigned_at TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             completed_at TEXT
@@ -340,6 +343,21 @@ final class Migrator
     {
         if (!$this->hasColumn('game_starts', 'running')) {
             $this->pdo->exec('ALTER TABLE game_starts ADD COLUMN running INTEGER NOT NULL DEFAULT 1');
+        }
+    }
+
+    /**
+     * The "times per period" columns: neither carries a CHECK constraint, so a plain ADD COLUMN
+     * works. Every existing task defaults to occurrence_index = occurrence_count = 1, i.e. "one
+     * slice covering the whole task" -- exactly what it already was.
+     */
+    private function ensureTaskOccurrenceColumns(): void
+    {
+        if (!$this->hasColumn('tasks', 'occurrence_index')) {
+            $this->pdo->exec('ALTER TABLE tasks ADD COLUMN occurrence_index INTEGER NOT NULL DEFAULT 1');
+        }
+        if (!$this->hasColumn('tasks', 'occurrence_count')) {
+            $this->pdo->exec('ALTER TABLE tasks ADD COLUMN occurrence_count INTEGER NOT NULL DEFAULT 1');
         }
     }
 

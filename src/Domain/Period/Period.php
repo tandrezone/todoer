@@ -123,4 +123,91 @@ final class Period
                     ->format('Y-m-d H:i:s');
         }
     }
+
+    /**
+     * Splits a range into $count equal-length, back-to-back windows, in order -- this is the "how
+     * many times in this period" feature: a task done 3x/day gets its day cut into three windows,
+     * one per occurrence, so each occurrence "appears as available" only inside its own slice.
+     *
+     * $rangeStart/$rangeEnd narrow the split to whatever explicit window the task was given (e.g.
+     * a daily task windowed to "09:00" -> "17:00" divides that span, not the whole day); when
+     * either is missing or unparseable, this period's own full boundaries (midnight to midnight,
+     * Monday to Monday, the 1st to the 1st) fill the gap.
+     *
+     * $count = 1 is the ordinary single-window case and is returned untouched, null bounds and
+     * all -- a task with no explicit window keeps meaning "no window at all" rather than being
+     * forced onto this period's full span.
+     *
+     * @return list<array{start: ?string, end: ?string}>
+     */
+    public function divideIntoWindows(int $count, ?string $rangeStart = null, ?string $rangeEnd = null): array
+    {
+        $count = max(1, $count);
+        if ($count === 1) {
+            return [['start' => $rangeStart, 'end' => $rangeEnd]];
+        }
+
+        $bounds = $this->boundaries();
+        $start = $this->parseOrDefault($rangeStart, $bounds['start']);
+        $end = $this->parseOrDefault($rangeEnd, $bounds['end']);
+        if ($end <= $start) {
+            // A backwards, zero-length, or unparseable explicit range falls back to the period's
+            // own span rather than producing broken windows.
+            $start = $bounds['start']->getTimestamp();
+            $end = $bounds['end']->getTimestamp();
+        }
+
+        $total = $end - $start;
+        $windows = [];
+        for ($i = 0; $i < $count; $i++) {
+            $sliceStart = $start + intdiv($total * $i, $count);
+            $sliceEnd = $i === $count - 1 ? $end : $start + intdiv($total * ($i + 1), $count);
+            $windows[] = [
+                'start' => date('Y-m-d H:i:s', $sliceStart),
+                'end' => date('Y-m-d H:i:s', $sliceEnd),
+            ];
+        }
+
+        return $windows;
+    }
+
+    /**
+     * This period's own full span: midnight to midnight for a day, Monday 00:00 to the following
+     * Monday 00:00 for a week, the 1st 00:00 to the 1st of the next month for a month. What
+     * divideIntoWindows() slices when no narrower range is given.
+     *
+     * @return array{start: DateTimeImmutable, end: DateTimeImmutable}
+     */
+    private function boundaries(): array
+    {
+        switch ($this->listType) {
+            case ListType::Daily:
+                $start = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $this->key . ' 00:00:00');
+                $start = $start === false ? new DateTimeImmutable('today') : $start;
+
+                return ['start' => $start, 'end' => $start->modify('+1 day')];
+
+            case ListType::Weekly:
+                [$year, $week] = array_pad(explode('-', $this->key, 2), 2, '1');
+                $start = (new DateTimeImmutable())->setISODate((int) $year, (int) $week, 1)->setTime(0, 0);
+
+                return ['start' => $start, 'end' => $start->modify('+7 days')];
+
+            case ListType::Monthly:
+                $start = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $this->key . '-01 00:00:00');
+                $start = $start === false ? new DateTimeImmutable('first day of this month') : $start;
+
+                return ['start' => $start, 'end' => $start->modify('+1 month')];
+        }
+    }
+
+    private function parseOrDefault(?string $value, DateTimeImmutable $default): int
+    {
+        if ($value === null || trim($value) === '') {
+            return $default->getTimestamp();
+        }
+        $timestamp = strtotime($value);
+
+        return $timestamp === false ? $default->getTimestamp() : $timestamp;
+    }
 }

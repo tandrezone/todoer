@@ -226,8 +226,9 @@ final class TaskRepository
         $statement = $this->pdo->prepare(
             'INSERT INTO tasks
                 (group_id, user_id, created_by, list_type, period_key, title, points, status,
-                 window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes, created_at)
-             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes,
+                 occurrence_index, occurrence_count, created_at)
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $statement->execute([
             $groupId,
@@ -243,6 +244,8 @@ final class TaskRepository
             $draft->assignedUserId,
             $draft->priority->value,
             $draft->timeLimitMinutes,
+            $draft->occurrenceIndex,
+            $draft->occurrenceCount,
             $this->clock->sqlNow(),
         ]);
 
@@ -261,8 +264,8 @@ final class TaskRepository
             'INSERT INTO tasks
                 (group_id, user_id, created_by, list_type, period_key, title, points, status,
                  window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes,
-                 assigned_at, created_at, completed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                 occurrence_index, occurrence_count, assigned_at, created_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $statement->execute([
             $fields['group_id'],
@@ -279,6 +282,8 @@ final class TaskRepository
             $fields['assigned_user_id'],
             $fields['priority'],
             $fields['time_limit_minutes'],
+            $fields['occurrence_index'] ?? 1,
+            $fields['occurrence_count'] ?? 1,
             $fields['assigned_at'],
             $fields['created_at'],
             $fields['completed_at'],
@@ -287,11 +292,12 @@ final class TaskRepository
         return (int) $this->pdo->lastInsertId();
     }
 
-    /** An edit that leaves the assignment alone: title, priority, timer and window only. */
+    /** An edit that leaves the assignment alone: title, priority, timer, window and occurrence slot only. */
     public function updateDetails(int $taskId, TaskDraft $draft): void
     {
         $statement = $this->pdo->prepare(
-            'UPDATE tasks SET title = ?, priority = ?, time_limit_minutes = ?, window_start = ?, window_end = ?
+            'UPDATE tasks SET title = ?, priority = ?, time_limit_minutes = ?, window_start = ?, window_end = ?,
+                 occurrence_index = ?, occurrence_count = ?
              WHERE id = ?'
         );
         $statement->execute([
@@ -300,6 +306,8 @@ final class TaskRepository
             $draft->timeLimitMinutes,
             $draft->windowStart,
             $draft->windowEnd,
+            $draft->occurrenceIndex,
+            $draft->occurrenceCount,
             $taskId,
         ]);
     }
@@ -313,8 +321,8 @@ final class TaskRepository
     {
         $statement = $this->pdo->prepare(
             'UPDATE tasks SET title = ?, assigned_type = ?, assigned_user_id = ?, priority = ?,
-                 time_limit_minutes = ?, window_start = ?, window_end = ?, user_id = NULL,
-                 status = ?, assigned_at = NULL, completed_at = NULL
+                 time_limit_minutes = ?, window_start = ?, window_end = ?, occurrence_index = ?, occurrence_count = ?,
+                 user_id = NULL, status = ?, assigned_at = NULL, completed_at = NULL
              WHERE id = ?'
         );
         $statement->execute([
@@ -325,6 +333,8 @@ final class TaskRepository
             $draft->timeLimitMinutes,
             $draft->windowStart,
             $draft->windowEnd,
+            $draft->occurrenceIndex,
+            $draft->occurrenceCount,
             TaskStatus::Unassigned->value,
             $taskId,
         ]);

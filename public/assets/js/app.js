@@ -181,143 +181,153 @@ async function loadTasks() {
     populateUserSelects(data.users);
   }
 
+  // Daily/weekly/monthly each still have their own Start/Stop, period and scoring underneath
+  // (see App\Service\PeriodService) -- they just no longer get three separate list cards. Each
+  // gets a small pill instead, and the API already folds weekly/monthly tasks into "daily"'s
+  // merged items/board (see App\Service\TaskBoardService::foldIntoDaily), which is what the one
+  // task list and one team board below read from.
   LIST_TYPES.forEach(type => {
-    const card = document.querySelector(`.list-card[data-list-type="${type}"]`);
+    const pill = document.querySelector(`.period-pill[data-list-type="${type}"]`);
     const info = data.tasks[type];
-    card.querySelector('[data-period-label]').textContent = info.label;
+    pill.querySelector('[data-period-label]').textContent = info.label;
+    pill.classList.toggle('is-running', info.running);
 
-    // Running locks the card down to just the task list + checkboxes: no adding, no editing,
-    // no team board -- see the .is-running rules in style.css. Stopped (or never started)
-    // shows the full add/assign/options UI instead.
-    card.classList.toggle('is-running', info.running);
-
-    const startBtn = card.querySelector('[data-start-btn]');
-    startBtn.textContent = info.running ? `Stop ${type}` : `Start ${type}`;
+    const startBtn = pill.querySelector('[data-start-btn]');
+    startBtn.textContent = info.running ? 'Stop' : 'Start';
     startBtn.dataset.running = info.running ? '1' : '0';
 
-    const hint = card.querySelector('[data-unassigned-hint]');
+    const hint = pill.querySelector('[data-unassigned-hint]');
     if (!info.running && info.unassigned_count > 0) {
       hint.hidden = false;
-      hint.textContent = `${info.unassigned_count} task${info.unassigned_count === 1 ? '' : 's'} waiting to be assigned — click "${startBtn.textContent}".`;
+      hint.textContent = `${info.unassigned_count} task${info.unassigned_count === 1 ? '' : 's'} waiting to be assigned.`;
     } else {
       hint.hidden = true;
     }
+  });
 
-    const listEl = card.querySelector('[data-task-list]');
-    const boardList = card.querySelector('[data-board-list]');
-    const boardCount = card.querySelector('[data-board-count]');
+  // The one merged list: the API already folds weekly/monthly tasks into "daily"'s items/board,
+  // ordered mine-first while any of the three is running.
+  const merged = data.tasks.daily;
+  const listEl = document.querySelector('[data-task-list]');
+  listEl.innerHTML = '';
+  if (merged.items.length === 0) {
+    listEl.innerHTML = merged.running
+      ? '<li class="empty-hint">Nothing on the list.</li>'
+      : '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
+  }
+  // In game mode the list is the whole board, ordered mine-first by the API. A divider marks
+  // where "yours" ends and "anyone's" begins, so the top of the list still reads as your plate.
+  let dividerPlaced = !merged.running;
+  merged.items.forEach(task => {
+    const taskType = task.list_type;
+    taskCache.set(String(task.id), { ...task, listType: taskType });
 
-    // Weekly and monthly don't get a visible list of their own -- their tasks are folded into
-    // Daily's list by the API (see App\Service\TaskBoardService). This card keeps its add-form/Start-Stop, but
-    // shows neither a task list nor a team board, so nothing renders twice.
-    if (type !== 'daily') {
-      listEl.innerHTML = '<li class="empty-hint">Shown in the Daily list above.</li>';
-      boardList.innerHTML = '';
-      boardCount.textContent = '(0)';
-      return;
+    if (!dividerPlaced && !task.is_mine) {
+      dividerPlaced = true;
+      const divider = document.createElement('li');
+      divider.className = 'list-divider';
+      divider.innerHTML = '<span>Up for grabs</span>';
+      listEl.appendChild(divider);
     }
 
-    listEl.innerHTML = '';
-    if (info.items.length === 0) {
-      listEl.innerHTML = info.running
-        ? '<li class="empty-hint">Nothing on this list.</li>'
-        : '<li class="empty-hint">Nothing assigned to you yet — add a task or ask someone to run Start.</li>';
+    const info = data.tasks[taskType];
+    const li = document.createElement('li');
+    li.className = 'task-item'
+      + (task.status === 'done' ? ' done' : '')
+      + (task.status === 'expired' ? ' expired' : '')
+      + (info.running && !task.is_mine ? ' not-mine' : '')
+      + (info.running && task.claimable ? ' claimable' : '');
+    const meta = [];
+    if (task.window_start || task.window_end) {
+      const startStr = formatWindow(task.window_start, taskType);
+      const endStr = formatWindow(task.window_end, taskType);
+      meta.push(`<span class="task-window">${escapeHtml(startStr)}${endStr ? ' &rarr; ' + escapeHtml(endStr) : ''}</span>`);
     }
-    // In game mode the list is the whole board, ordered mine-first by the API. A divider marks
-    // where "yours" ends and "anyone's" begins, so the top of the list still reads as your plate.
-    let dividerPlaced = !info.running;
-    info.items.forEach(task => {
-      const taskType = task.list_type; // may be weekly/monthly, folded in here rather than daily
-      taskCache.set(String(task.id), { ...task, listType: taskType });
-
-      if (!dividerPlaced && !task.is_mine) {
-        dividerPlaced = true;
-        const divider = document.createElement('li');
-        divider.className = 'list-divider';
-        divider.innerHTML = '<span>Up for grabs</span>';
-        listEl.appendChild(divider);
+    if (task.occurrence_count > 1) {
+      meta.push(`<span class="occurrence-hint">${task.occurrence_index}/${task.occurrence_count}</span>`);
+    }
+    if (task.priority === 'HIGH' && task.status === 'open') {
+      meta.push('<span class="timer-hint">⏱ short timer</span>');
+    } else if (task.time_limit_minutes && task.status === 'open') {
+      meta.push(`<span class="timer-hint">⏱ ${task.time_limit_minutes}m</span>`);
+    }
+    // Who has it, and (when you can't take it) why not. Daily's own stopped view is always just
+    // your own tasks, so this only matters there while running -- but a folded weekly/monthly
+    // task can belong to someone else even while daily is stopped, so those show a holder
+    // regardless.
+    let holderHtml = '';
+    if ((info.running || taskType !== 'daily') && !task.is_mine) {
+      const who = task.holder_username
+        ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
+        : '<em>unassigned</em>';
+      holderHtml = `<span class="task-holder">${who}</span>`;
+      if (task.claimable) {
+        meta.push('<span class="claim-hint">yours if you get there first</span>');
+      } else if (task.status === 'open') {
+        meta.push(`<span class="claim-blocked">${escapeHtml(claimBlockedLabel(task.claim_reason))}</span>`);
       }
-
-      const li = document.createElement('li');
-      li.className = 'task-item'
-        + (task.status === 'done' ? ' done' : '')
-        + (task.status === 'expired' ? ' expired' : '')
-        + (info.running && !task.is_mine ? ' not-mine' : '')
-        + (info.running && task.claimable ? ' claimable' : '');
-      const meta = [];
-      if (task.window_start || task.window_end) {
-        const startStr = formatWindow(task.window_start, taskType);
-        const endStr = formatWindow(task.window_end, taskType);
-        meta.push(`<span class="task-window">${escapeHtml(startStr)}${endStr ? ' &rarr; ' + escapeHtml(endStr) : ''}</span>`);
-      }
-      if (task.priority === 'HIGH' && task.status === 'open') {
-        meta.push('<span class="timer-hint">⏱ short timer</span>');
-      } else if (task.time_limit_minutes && task.status === 'open') {
-        meta.push(`<span class="timer-hint">⏱ ${task.time_limit_minutes}m</span>`);
-      }
-      // Who has it, and (when you can't take it) why not. Daily's own stopped view is always
-      // just your own tasks, so this only matters there while running -- but a folded
-      // weekly/monthly task can belong to someone else even while Daily is stopped, so those
-      // show a holder regardless.
-      let holderHtml = '';
-      if ((info.running || taskType !== 'daily') && !task.is_mine) {
-        const who = task.holder_username
-          ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
-          : '<em>unassigned</em>';
-        holderHtml = `<span class="task-holder">${who}</span>`;
-        if (task.claimable) {
-          meta.push('<span class="claim-hint">yours if you get there first</span>');
-        } else if (task.status === 'open') {
-          meta.push(`<span class="claim-blocked">${escapeHtml(claimBlockedLabel(task.claim_reason))}</span>`);
-        }
-      }
-      const checkbox = task.can_complete
-        ? `<input type="checkbox" ${task.status === 'done' ? 'checked' : ''} data-task-id="${task.id}"
-             ${task.claimable ? 'title="Do this one instead — the points come to you"' : ''}>`
-        : `<span class="task-check-placeholder" title="${escapeHtml(claimBlockedLabel(task.claim_reason))}"></span>`;
-      li.innerHTML = `
-        ${checkbox}
-        <span class="task-body">
-          <span class="task-title">${escapeHtml(task.title)}</span>
-          ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
-        </span>
-        ${holderHtml}
-        ${taskType !== 'daily' ? `<span class="chip origin-badge">${LIST_LABEL[taskType]}</span>` : ''}
-        ${priorityBadgeHtml(task.priority)}
-        <span class="chip task-points">+${task.points}</span>
+    }
+    const checkbox = task.can_complete
+      ? `<input type="checkbox" ${task.status === 'done' ? 'checked' : ''} data-task-id="${task.id}"
+           ${task.claimable ? 'title="Do this one instead — the points come to you"' : ''}>`
+      : `<span class="task-check-placeholder" title="${escapeHtml(claimBlockedLabel(task.claim_reason))}"></span>`;
+    li.innerHTML = `
+      ${checkbox}
+      <span class="task-body">
+        <span class="task-title">${escapeHtml(task.title)}</span>
+        ${meta.length ? `<span class="task-meta">${meta.join(' &middot; ')}</span>` : ''}
+      </span>
+      ${holderHtml}
+      <span class="chip origin-badge">${LIST_LABEL[taskType]}</span>
+      ${priorityBadgeHtml(task.priority)}
+      <span class="chip task-points">+${task.points}</span>
+      ${info.running ? '' : `
         <button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>
         <button class="task-del" data-del-id="${task.id}" title="Delete">&times;</button>
-      `;
-      listEl.appendChild(li);
-    });
+      `}
+    `;
+    listEl.appendChild(li);
+  });
 
-    boardCount.textContent = `(${info.board.length})`;
-    boardList.innerHTML = '';
-    if (info.board.length === 0) {
-      boardList.innerHTML = '<li class="empty-hint">No tasks in this period yet.</li>';
-    }
-    info.board.forEach(task => {
-      taskCache.set(String(task.id), { ...task, listType: task.list_type });
-      const li = document.createElement('li');
-      li.className = 'board-task-row';
-      const holder = task.holder_username
-        ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
-        : (task.assigned_type === 'SPECIFIC_USER' ? '<em>locked, not yet assigned</em>' : '<em>unassigned</em>');
-      const boardStartStr = formatWindow(task.window_start, task.list_type);
-      const boardEndStr = formatWindow(task.window_end, task.list_type);
-      const windowHtml = (boardStartStr || boardEndStr)
-        ? `<span class="task-window">${escapeHtml(boardStartStr)}${boardEndStr ? ' &rarr; ' + escapeHtml(boardEndStr) : ''}</span>`
-        : '';
-      li.innerHTML = `
-        <span class="chip status-chip status-${task.status}">${STATUS_LABEL[task.status] || task.status}</span>
-        <span class="task-title">${escapeHtml(task.title)}</span>
-        ${windowHtml}
-        ${priorityBadgeHtml(task.priority)}
-        <span class="board-holder">${holder}</span>
-        ${task.can_edit ? `<button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>` : ''}
-      `;
-      boardList.appendChild(li);
-    });
+  // The team board is likewise one merged panel: every list's board rows, done ones pushed to
+  // the bottom (mirroring App\Service\TaskBoardService::sortBoard), tie-broken by creation order.
+  const boardTasks = LIST_TYPES.flatMap(type => data.tasks[type].board);
+  boardTasks.sort((a, b) => {
+    const aDone = a.status === 'done' ? 1 : 0;
+    const bDone = b.status === 'done' ? 1 : 0;
+    if (aDone !== bDone) return aDone - bDone;
+    return String(a.created_at).localeCompare(String(b.created_at));
+  });
+  const boardList = document.querySelector('[data-board-list]');
+  const boardCount = document.querySelector('[data-board-count]');
+  boardCount.textContent = `(${boardTasks.length})`;
+  boardList.innerHTML = '';
+  if (boardTasks.length === 0) {
+    boardList.innerHTML = '<li class="empty-hint">No tasks yet.</li>';
+  }
+  boardTasks.forEach(task => {
+    taskCache.set(String(task.id), { ...task, listType: task.list_type });
+    const li = document.createElement('li');
+    li.className = 'board-task-row';
+    const holder = task.holder_username
+      ? `<span class="dot" style="background:${escapeHtml(task.holder_color)}"></span>${escapeHtml(task.holder_username)}`
+      : (task.assigned_type === 'SPECIFIC_USER' ? '<em>locked, not yet assigned</em>' : '<em>unassigned</em>');
+    const boardStartStr = formatWindow(task.window_start, task.list_type);
+    const boardEndStr = formatWindow(task.window_end, task.list_type);
+    const windowHtml = (boardStartStr || boardEndStr)
+      ? `<span class="task-window">${escapeHtml(boardStartStr)}${boardEndStr ? ' &rarr; ' + escapeHtml(boardEndStr) : ''}</span>`
+      : '';
+    li.innerHTML = `
+      <span class="chip status-chip status-${task.status}">${STATUS_LABEL[task.status] || task.status}</span>
+      <span class="task-title">${escapeHtml(task.title)}</span>
+      ${windowHtml}
+      ${task.occurrence_count > 1 ? `<span class="occurrence-hint">${task.occurrence_index}/${task.occurrence_count}</span>` : ''}
+      <span class="chip origin-badge">${LIST_LABEL[task.list_type]}</span>
+      ${priorityBadgeHtml(task.priority)}
+      <span class="board-holder">${holder}</span>
+      ${task.can_edit && !data.tasks[task.list_type].running ? `<button class="task-edit" data-edit-id="${task.id}" title="Edit">&#9998;</button>` : ''}
+    `;
+    boardList.appendChild(li);
   });
 }
 
@@ -353,6 +363,8 @@ function openTaskEditor(task) {
   form.elements.assigned_user_id.value = task.assigned_user_id || '';
   form.elements.priority.value = task.priority;
   form.elements.time_limit_minutes.value = task.time_limit_minutes || '';
+  form.elements.times_per_period.value = task.occurrence_count || 1;
+  form.elements.occurrence_index.value = task.occurrence_index || 1;
   form.querySelector('.edit-specific-user-field').hidden = task.assigned_type !== 'SPECIFIC_USER';
   form.querySelector('.edit-time-limit-field').classList.toggle('disabled-field', task.priority === 'HIGH');
   form.elements.time_limit_minutes.disabled = task.priority === 'HIGH';
@@ -366,6 +378,8 @@ async function saveTaskEdit(form) {
     action: 'edit', task_id: form.elements.task_id.value, title: form.elements.title.value.trim(),
     assigned_type: form.elements.assigned_type.value, assigned_user_id: form.elements.assigned_user_id.value,
     priority: form.elements.priority.value, time_limit_minutes: form.elements.time_limit_minutes.value || null,
+    times_per_period: form.elements.times_per_period.value || 1,
+    occurrence_index: form.elements.occurrence_index.value || 1,
   };
   if (type === 'daily') {
     payload.window_start_time = form.elements.window_start_time.value || null;
@@ -447,14 +461,25 @@ async function loadBanner() {
   slot.appendChild(div);
 }
 
+// Shows only the window fields that match the chosen periodicity -- a time-of-day for daily, a
+// weekday for weekly, a day-of-month for monthly -- since a "window" is captured in whatever
+// grain fits that cadence (see templates/dashboard.php and App\Domain\Period\Period).
+function setAddWindowFieldsVisibility(form) {
+  const type = form.querySelector('select[name=list_type]').value;
+  form.querySelectorAll('.window-daily, .window-weekly, .window-monthly').forEach(field => { field.hidden = true; });
+  form.querySelectorAll(`.window-${type}`).forEach(field => { field.hidden = false; });
+}
+
 function bindListEvents() {
   document.querySelectorAll('.add-task-form').forEach(form => {
+    setAddWindowFieldsVisibility(form);
+
     form.addEventListener('submit', async e => {
       e.preventDefault();
       const titleInput = form.querySelector('input[name=title]');
       const title = titleInput.value.trim();
       if (!title) return;
-      const listType = form.closest('.list-card').dataset.listType;
+      const listType = form.querySelector('select[name=list_type]').value;
 
       const assignedType = form.querySelector('select[name=assigned_type]').value;
       const payload = {
@@ -464,12 +489,13 @@ function bindListEvents() {
         assigned_type: assignedType,
         priority: form.querySelector('select[name=priority]').value,
         time_limit_minutes: form.querySelector('input[name=time_limit_minutes]').value || null,
+        times_per_period: form.querySelector('input[name=times_per_period]').value || 1,
       };
       if (assignedType === 'SPECIFIC_USER') {
         payload.assigned_user_id = form.querySelector('select[name=assigned_user_id]').value;
       }
-      // Window fields are named differently per list type (see templates/dashboard.php) since each list's
-      // window is captured in whatever grain fits its cadence -- a time-of-day, a weekday, or
+      // Window fields are named differently per periodicity (see templates/dashboard.php) since
+      // each one is captured in whatever grain fits its cadence -- a time-of-day, a weekday, or
       // a day-of-month -- rather than a full date that would just repeat the period.
       if (listType === 'daily') {
         payload.window_start_time = form.querySelector('input[name=window_start_time]').value || null;
@@ -491,6 +517,7 @@ function bindListEvents() {
         form.reset();
         form.querySelector('.specific-user-field').hidden = true;
         form.querySelector('.time-limit-field').classList.remove('disabled-field');
+        setAddWindowFieldsVisibility(form);
         await loadTasks();
       } catch (err) {
         alert(err.message);
@@ -532,6 +559,11 @@ function bindListEvents() {
       timeLimitField.classList.toggle('disabled-field', isHigh);
       timeLimitField.querySelector('input').disabled = isHigh;
       timeLimitField.title = isHigh ? 'HIGH priority tasks always use the short auto-reassign timer instead.' : '';
+      return;
+    }
+
+    if (e.target.matches('.list-type-select')) {
+      setAddWindowFieldsVisibility(e.target.closest('form'));
     }
   });
 
@@ -557,7 +589,7 @@ function bindListEvents() {
     }
 
     if (e.target.matches('[data-start-btn]')) {
-      const listType = e.target.closest('.list-card').dataset.listType;
+      const listType = e.target.closest('.period-pill').dataset.listType;
       const isRunning = e.target.dataset.running === '1';
       const action = isRunning ? 'stop' : 'start';
       e.target.disabled = true;

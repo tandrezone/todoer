@@ -43,6 +43,8 @@ final class TaskExportService
             'assigned_type' => $row['assigned_type'],
             'priority' => $row['priority'],
             'time_limit_minutes' => $row['time_limit_minutes'] !== null ? (int) $row['time_limit_minutes'] : null,
+            'occurrence_index' => isset($row['occurrence_index']) ? (int) $row['occurrence_index'] : 1,
+            'occurrence_count' => isset($row['occurrence_count']) ? (int) $row['occurrence_count'] : 1,
             'assigned_at' => $row['assigned_at'],
             'created_at' => $row['created_at'],
             'completed_at' => $row['completed_at'],

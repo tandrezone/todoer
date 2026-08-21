@@ -46,7 +46,11 @@ final class Task
         public readonly ?string $createdAt,
         public readonly ?string $completedAt,
         public readonly ?string $holderUsername = null,
-        public readonly ?string $holderColor = null
+        public readonly ?string $holderColor = null,
+        /** Which 1/occurrenceCount slice of the period this row is. 1-based; 1 when times-per-period is just 1. */
+        public readonly int $occurrenceIndex = 1,
+        /** How many equal slices this task's periodicity was divided into when it was created/edited. */
+        public readonly int $occurrenceCount = 1
     ) {
     }
 
@@ -73,7 +77,9 @@ final class Task
             isset($row['created_at']) ? self::nullableString($row['created_at']) : null,
             isset($row['completed_at']) ? self::nullableString($row['completed_at']) : null,
             isset($row['holder_username']) ? self::nullableString($row['holder_username']) : null,
-            isset($row['holder_color']) ? self::nullableString($row['holder_color']) : null
+            isset($row['holder_color']) ? self::nullableString($row['holder_color']) : null,
+            isset($row['occurrence_index']) ? (int) $row['occurrence_index'] : 1,
+            isset($row['occurrence_count']) ? (int) $row['occurrence_count'] : 1
         );
     }
 
@@ -238,6 +244,8 @@ final class Task
             'completed_at' => $this->completedAt,
             'holder_username' => $this->holderUsername,
             'holder_color' => $this->holderColor,
+            'occurrence_index' => $this->occurrenceIndex,
+            'occurrence_count' => $this->occurrenceCount,
         ];
     }
 

@@ -81,6 +81,8 @@ final class TaskImportService
                     'assigned_user_id' => null,
                     'priority' => Priority::Moderate->value,
                     'time_limit_minutes' => null,
+                    'occurrence_index' => 1,
+                    'occurrence_count' => 1,
                     'assigned_at' => null,
                     'created_at' => $this->clock->sqlNow(),
                     'completed_at' => null,
@@ -140,6 +142,11 @@ final class TaskImportService
                     $periodKey = $this->periods->currentPeriod($listType)->key;
                 }
 
+                // Older exports predate "times per period" and simply have neither field -- those
+                // rows round-trip as a single occurrence, exactly what they already were.
+                $occurrenceCount = max(1, (int) ($item['occurrence_count'] ?? 1));
+                $occurrenceIndex = max(1, min($occurrenceCount, (int) ($item['occurrence_index'] ?? 1)));
+
                 $createdIds[] = $this->tasks->insertRestored([
                     'group_id' => $groupId,
                     'user_id' => $memberIds[(string) ($item['user'] ?? '')] ?? null,
@@ -157,6 +164,8 @@ final class TaskImportService
                     'time_limit_minutes' => isset($item['time_limit_minutes']) && $item['time_limit_minutes'] !== null
                         ? (int) $item['time_limit_minutes']
                         : null,
+                    'occurrence_index' => $occurrenceIndex,
+                    'occurrence_count' => $occurrenceCount,
                     'assigned_at' => $this->nullableString($item['assigned_at'] ?? null),
                     'created_at' => $this->nullableString($item['created_at'] ?? null) ?? $this->clock->sqlNow(),
                     'completed_at' => $this->nullableString($item['completed_at'] ?? null),
