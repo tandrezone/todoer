@@ -10,6 +10,20 @@ const TODOER_POINTS = [
 
 const TODOER_LIST_TYPES = ['daily', 'weekly', 'monthly'];
 
+// The fixed play window every list runs on. A period opens at 06:30 on its first day and closes
+// at 23:59 on its last one:
+//   daily   -> 06:30 that day        .. 23:59 that day
+//   weekly  -> 06:30 Monday          .. 23:59 Sunday
+//   monthly -> 06:30 on the 1st      .. 23:59 on the last day of the month
+// These bounds are the outer limit of everything else: a task with no window of its own inherits
+// them, and a task with one is clamped inside them (see todoer_period_window_datetime()). Nothing
+// can be ticked off before its period opens, and once the close time passes, unfinished tasks are
+// missed rather than handed around (see todoer_process_expirations()).
+const TODOER_PERIOD_OPEN_HOUR = 6;
+const TODOER_PERIOD_OPEN_MINUTE = 30;
+const TODOER_PERIOD_CLOSE_HOUR = 23;
+const TODOER_PERIOD_CLOSE_MINUTE = 59;
+
 const TODOER_LABELS = [
     'daily' => 'Today',
     'weekly' => 'This week',
@@ -32,6 +46,97 @@ function todoer_period_key(string $listType, ?int $ts = null): string {
 }
 
 /**
+ * The first and last calendar dates covered by a period, as 'Y-m-d'. Weekly periods run
+ * Monday..Sunday (ISO), monthly periods the 1st..the month's real last day.
+ */
+function todoer_period_date_range(string $listType, string $periodKey): array {
+    switch ($listType) {
+        case 'daily':
+            return [$periodKey, $periodKey];
+        case 'weekly':
+            [$year, $week] = explode('-', $periodKey);
+            $start = new DateTime();
+            $start->setISODate((int) $year, (int) $week, 1);   // Monday
+            $end = new DateTime();
+            $end->setISODate((int) $year, (int) $week, 7);     // Sunday
+            return [$start->format('Y-m-d'), $end->format('Y-m-d')];
+        case 'monthly':
+            $first = $periodKey . '-01';
+            return [$first, date('Y-m-t', strtotime($first))];
+        default:
+            throw new InvalidArgumentException('Unknown list type: ' . $listType);
+    }
+}
+
+/**
+ * The period's play window as ['start' => datetime, 'end' => datetime]: opens 06:30 on the first
+ * day, closes 23:59 on the last. Every task in the period lives inside this.
+ */
+function todoer_period_bounds(string $listType, string $periodKey): array {
+    [$firstDay, $lastDay] = todoer_period_date_range($listType, $periodKey);
+    return [
+        'start' => $firstDay . ' ' . sprintf('%02d:%02d:00', TODOER_PERIOD_OPEN_HOUR, TODOER_PERIOD_OPEN_MINUTE),
+        'end' => $lastDay . ' ' . sprintf('%02d:%02d:00', TODOER_PERIOD_CLOSE_HOUR, TODOER_PERIOD_CLOSE_MINUTE),
+    ];
+}
+
+/** Whether a period's play window is open right now (between 06:30 and 23:59 of its own dates). */
+function todoer_period_window_is_open(string $listType, string $periodKey, ?int $now = null): bool {
+    $now = $now ?? time();
+    $bounds = todoer_period_bounds($listType, $periodKey);
+    return $now >= strtotime($bounds['start']) && $now <= strtotime($bounds['end']);
+}
+
+/** "06:30 → 23:59" / "Mon 06:30 → Sun 23:59" -- the window, phrased for the list's cadence. */
+function todoer_period_window_label(string $listType, string $periodKey): string {
+    $bounds = todoer_period_bounds($listType, $periodKey);
+    $open = date('H:i', strtotime($bounds['start']));
+    $close = date('H:i', strtotime($bounds['end']));
+    switch ($listType) {
+        case 'daily':
+            return $open . ' → ' . $close;
+        case 'weekly':
+            return 'Mon ' . $open . ' → Sun ' . $close;
+        default:
+            return date('j M', strtotime($bounds['start'])) . ' ' . $open
+                . ' → ' . date('j M', strtotime($bounds['end'])) . ' ' . $close;
+    }
+}
+
+/**
+ * Holds a datetime inside the period's window. A task can be tighter than its period (do the
+ * dishes between 18:00 and 20:00) but never wider: a window that starts before the period opens
+ * or ends after it closes is pulled back to the period's own bound, so the 06:30/23:59 rule is
+ * the one thing every task obeys.
+ */
+function todoer_clamp_to_period(string $listType, string $periodKey, ?string $datetime): ?string {
+    if ($datetime === null) {
+        return null;
+    }
+    $bounds = todoer_period_bounds($listType, $periodKey);
+    if ($datetime < $bounds['start']) {
+        return $bounds['start'];
+    }
+    if ($datetime > $bounds['end']) {
+        return $bounds['end'];
+    }
+    return $datetime;
+}
+
+/**
+ * A task's window, filling in the period's own bounds wherever the task doesn't specify one.
+ * Returns ['start' => datetime, 'end' => datetime] -- both always set, because every task is
+ * bounded by its period even when nobody typed a time.
+ */
+function todoer_task_window(string $listType, string $periodKey, ?string $start, ?string $end): array {
+    $bounds = todoer_period_bounds($listType, $periodKey);
+    return [
+        'start' => todoer_clamp_to_period($listType, $periodKey, $start) ?? $bounds['start'],
+        'end' => todoer_clamp_to_period($listType, $periodKey, $end) ?? $bounds['end'],
+    ];
+}
+
+/**
  * Combines a natural-cadence window value with a task's period_key into a full
  * "YYYY-MM-DD HH:MM:SS" datetime, so window_start/window_end stay ordinary datetimes
  * everywhere else in the app (sorting, deadline math) no matter which shorthand the UI
@@ -42,8 +147,9 @@ function todoer_period_key(string $listType, ?int $ts = null): string {
  *   daily   -> "HH:MM" (from <input type=time>)
  *   weekly  -> "1".."7" (Mon=1 .. Sun=7)
  *   monthly -> "1".."31" (day of month; clamped to that month's actual last day)
- * $endOfDay: the weekly/monthly shorthands carry no time-of-day, so a window *start* defaults
- *            to 00:00 and a window *end* defaults to 23:59 on the resolved date.
+ * $endOfDay: the weekly/monthly shorthands carry no time-of-day, so a window *start* defaults to
+ *            the period's opening time (06:30) and a window *end* to its closing time (23:59) on
+ *            the resolved date. The result is clamped into the period's own bounds either way.
  * Returns null for an empty/invalid value.
  */
 function todoer_period_window_datetime(string $listType, string $periodKey, ?string $value, bool $endOfDay): ?string {
@@ -56,7 +162,11 @@ function todoer_period_window_datetime(string $listType, string $periodKey, ?str
         if (!preg_match('/^([01]?\d|2[0-3]):([0-5]\d)$/', $value, $m)) {
             return null;
         }
-        return $periodKey . ' ' . sprintf('%02d:%02d', (int) $m[1], (int) $m[2]) . ':00';
+        return todoer_clamp_to_period(
+            'daily',
+            $periodKey,
+            $periodKey . ' ' . sprintf('%02d:%02d', (int) $m[1], (int) $m[2]) . ':00'
+        );
     }
 
     if ($listType === 'weekly') {
@@ -67,8 +177,12 @@ function todoer_period_window_datetime(string $listType, string $periodKey, ?str
         [$year, $week] = explode('-', $periodKey);
         $dt = new DateTime();
         $dt->setISODate((int) $year, (int) $week, $day);
-        $dt->setTime($endOfDay ? 23 : 0, $endOfDay ? 59 : 0, 0);
-        return $dt->format('Y-m-d H:i:s');
+        $dt->setTime(
+            $endOfDay ? TODOER_PERIOD_CLOSE_HOUR : TODOER_PERIOD_OPEN_HOUR,
+            $endOfDay ? TODOER_PERIOD_CLOSE_MINUTE : TODOER_PERIOD_OPEN_MINUTE,
+            0
+        );
+        return todoer_clamp_to_period('weekly', $periodKey, $dt->format('Y-m-d H:i:s'));
     }
 
     // monthly
@@ -79,8 +193,12 @@ function todoer_period_window_datetime(string $listType, string $periodKey, ?str
     $lastDay = (int) date('t', strtotime($periodKey . '-01'));
     $day = min($day, $lastDay);
     $dt = new DateTime($periodKey . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT));
-    $dt->setTime($endOfDay ? 23 : 0, $endOfDay ? 59 : 0, 0);
-    return $dt->format('Y-m-d H:i:s');
+    $dt->setTime(
+        $endOfDay ? TODOER_PERIOD_CLOSE_HOUR : TODOER_PERIOD_OPEN_HOUR,
+        $endOfDay ? TODOER_PERIOD_CLOSE_MINUTE : TODOER_PERIOD_OPEN_MINUTE,
+        0
+    );
+    return todoer_clamp_to_period('monthly', $periodKey, $dt->format('Y-m-d H:i:s'));
 }
 
 function todoer_period_label(string $listType, string $periodKey): string {
