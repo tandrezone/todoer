@@ -22,6 +22,21 @@ set_exception_handler(function (Throwable $e): void {
     exit;
 });
 
+// Every time in this app is a *wall-clock* time: a list opening at 06:30 and closing at 23:59,
+// a period key of "today", a deadline. All of that runs off PHP's default timezone, which is
+// commonly UTC -- so left alone, "06:30" would mean 07:30 on a British summer morning, and the
+// day would roll over an hour early. So the app picks its own zone rather than inheriting the
+// server's: TODOER_TIMEZONE if set, otherwise the constant below (change this one line, or set
+// the variable, if the group lives somewhere else).
+const TODOER_DEFAULT_TIMEZONE = 'Europe/London';
+$todoerTimezone = getenv('TODOER_TIMEZONE') ?: TODOER_DEFAULT_TIMEZONE;
+try {
+    date_default_timezone_set($todoerTimezone);
+} catch (Throwable $e) {
+    error_log('Todoer: invalid timezone "' . $todoerTimezone . '", falling back to UTC.');
+    date_default_timezone_set('UTC');
+}
+
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/groups.php';

@@ -77,6 +77,7 @@ tasks can I see, and who am I competing against":
 - Anyone can join a group themselves with its **invite code** — on the Join form
   at sign-up, or from the Group page later. Joining moves you out of your current
   group, since membership is one group at a time.
+- The admin also owns the **Start/Stop** control on each list (see below).
 - Inside a group, everyone sees everything: all members' tasks on the team board,
   the same daily/weekly/monthly lists, the same leaderboard, the same prize
   history.
@@ -115,9 +116,39 @@ person is in your group. See `includes/groups.php`.
   are calculated. Notifications are stored, delivered on the next dashboard visit, and sent only once
   per event.
 
+## When each list is open
+
+Every list runs on a fixed window, and nothing can be ticked off outside it:
+
+| List | Opens | Closes |
+| --- | --- | --- |
+| Daily | 06:30 that day | 23:59 that day |
+| Weekly | Monday 06:30 | Sunday 23:59 |
+| Monthly | 06:30 on the 1st | 23:59 on the last day of the month |
+
+- A task added without a window of its own **inherits the period's**, so every task has one.
+- A task can be *tighter* than its period ("dishes between 18:00 and 20:00") but never wider: a
+  window reaching outside the period is clamped back to 06:30 / 23:59.
+- The window applies to the holder too, not just to someone taking a task over — nothing is
+  tickable before the list opens or after it closes.
+- When the window closes, anything unfinished is **missed**. It isn't passed to another player,
+  because a new holder couldn't beat a deadline that has already gone.
+- A per-task countdown (a time limit, or HIGH priority) still hands the task on mid-window as
+  before; only the window itself ends the task's life.
+
+These are wall-clock times, so the app pins its own timezone rather than inheriting the server's
+(which is usually UTC — 06:30 UTC would be 07:30 on a British summer morning). It defaults to
+`Europe/London`; set `TODOER_TIMEZONE` or change `TODOER_DEFAULT_TIMEZONE` in
+`includes/bootstrap.php` if your group is elsewhere.
+
 ## Game mode: the shared board
 
-Pressing **Start** on a list puts it in game mode. While a list is running:
+Pressing **Start** on a list puts it in game mode. **Only the group admin has the Start/Stop
+button** — starting deals out everyone's tasks and stopping unlocks editing for the whole group,
+so it's the admin's call. Members see the list and play; if a list hasn't been started yet, they
+get told the admin starts it. The rule is enforced by the API, not just hidden in the page.
+
+While a list is running:
 
 - Adding, editing and deleting are locked; the list becomes the board you play on.
 - The list shows **every** task in that period, not just yours, with **your own tasks at the
@@ -130,6 +161,7 @@ Pressing **Start** on a list puts it in game mode. While a list is running:
   one" rather than a double completion.
 - A task **locked to a specific person** is never up for grabs, and a task whose window hasn't
   opened yet (or has already closed) can't be taken either. The row says which of those it is.
+- Nothing is up for grabs while a list is stopped — that's planning time, not play.
 - Whoever lost the task gets a notification naming who took it and how many points went with it
   (in-app, plus a push notification if they've enabled it).
 - Un-ticking a task you took over hands it back to the person you took it from, rather than
@@ -260,6 +292,8 @@ todoer/
 - Tasks are a shared pool per period rather than private lists — everyone *in
   your group* can see and add to the same daily/weekly/monthly board, and the
   "Team board" panel on each list shows who currently holds what.
+- Upgrading a database that predates the fixed windows backfills every task with the window its
+  period implies (06:30 to 23:59), so old tasks play by the same rule as new ones.
 - Upgrading a database that predates groups folds the whole install into a single
   group named "Our group" (the first registered user becomes its admin), which
   keeps every existing task, score and prize exactly where it was. The prize

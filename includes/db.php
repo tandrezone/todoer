@@ -1,6 +1,11 @@
 <?php
 // Database bootstrap: opens (and initializes/migrates on first run) the SQLite file.
 
+// For todoer_period_bounds(), used by the period-window backfill in todoer_migrate(). period.php
+// requires this file straight back; require_once makes the cycle a no-op, and neither file calls
+// into the other while loading.
+require_once __DIR__ . '/period.php';
+
 function todoer_db(): PDO {
     static $pdo = null;
     if ($pdo !== null) {
@@ -99,6 +104,7 @@ function todoer_migrate(PDO $pdo): void {
     }
 
     todoer_migrate_groups($pdo);
+    todoer_migrate_period_windows($pdo);
 
     // `running` has no CHECK constraint either -- plain ADD COLUMN, defaulting existing rows
     // (periods that were already started under the old one-way "Start" behavior) to running=1.
@@ -356,4 +362,41 @@ function todoer_generate_invite_code(PDO $pdo): string {
         }
     }
     throw new RuntimeException('Could not generate a unique invite code.');
+}
+
+/**
+ * Gives every task that predates the fixed period windows the window its period now implies
+ * (06:30 on the period's first day to 23:59 on its last). Before this, a task added without an
+ * explicit window had none at all and could be ticked off at any hour; now the list's opening and
+ * closing times are part of the game, so old tasks are brought onto the same footing rather than
+ * being the only ones exempt from it.
+ *
+ * Idempotent by construction: every insert path now fills both columns, so once this has run there
+ * is nothing left with a NULL window for it to touch.
+ */
+function todoer_migrate_period_windows(PDO $pdo): void {
+    $pending = $pdo->query(
+        'SELECT DISTINCT list_type, period_key FROM tasks WHERE window_start IS NULL OR window_end IS NULL'
+    )->fetchAll();
+    if (!$pending) {
+        return;
+    }
+
+    $update = $pdo->prepare(
+        'UPDATE tasks
+         SET window_start = COALESCE(window_start, ?), window_end = COALESCE(window_end, ?)
+         WHERE list_type = ? AND period_key = ? AND (window_start IS NULL OR window_end IS NULL)'
+    );
+    foreach ($pending as $row) {
+        try {
+            $bounds = todoer_period_bounds($row['list_type'], $row['period_key']);
+        } catch (Throwable $e) {
+            // An unparseable period_key from some hand-edited row: leave it alone rather than
+            // failing everyone's boot over it.
+            error_log('Todoer: skipped window backfill for ' . $row['list_type'] . '/' . $row['period_key']
+                . ': ' . $e->getMessage());
+            continue;
+        }
+        $update->execute([$bounds['start'], $bounds['end'], $row['list_type'], $row['period_key']]);
+    }
 }

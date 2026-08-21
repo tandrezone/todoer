@@ -33,11 +33,13 @@ if (!$isMultipart) {
     // Imported tasks land in the shared ANY_USER pool at MODERATE priority with no window/timer
     // of their own -- matching api/tasks.php's 'add' defaults -- and created_by/status/etc. are
     // set explicitly so this insert stays valid against the assignment-feature schema.
+    // Imported tasks get the period's own window (06:30 to 23:59) like any other task added
+    // without one of its own -- see todoer_task_window().
     $insert = $pdo->prepare(
         "INSERT INTO tasks
             (group_id, user_id, created_by, list_type, period_key, title, points, status,
              window_start, window_end, assigned_type, assigned_user_id, priority, time_limit_minutes)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, 'unassigned', NULL, NULL, 'ANY_USER', NULL, 'MODERATE', NULL)"
+         VALUES (?, NULL, ?, ?, ?, ?, ?, 'unassigned', ?, ?, 'ANY_USER', NULL, 'MODERATE', NULL)"
     );
 
     $created = 0;
@@ -53,7 +55,11 @@ if (!$isMultipart) {
             $title = mb_substr($title, 0, 200);
             $periodKey = todoer_period_key($listType);
             $points = TODOER_POINTS[$listType];
-            $insert->execute([$groupId, $user['id'], $listType, $periodKey, $title, $points]);
+            $window = todoer_task_window($listType, $periodKey, null, null);
+            $insert->execute([
+                $groupId, $user['id'], $listType, $periodKey, $title, $points,
+                $window['start'], $window['end'],
+            ]);
             $createdIds[] = (int) $pdo->lastInsertId();
             $created++;
         }

@@ -86,9 +86,15 @@ if ($method === 'GET') {
             return $aDone === $bDone ? strcmp((string) $a['created_at'], (string) $b['created_at']) : $aDone <=> $bDone;
         });
 
+        $bounds = todoer_period_bounds($listType, $periodKey);
         $tasks[$listType] = [
             'period_key' => $periodKey,
             'label' => todoer_period_label($listType, $periodKey),
+            // The fixed play window, so the dashboard can show when this list opens and closes.
+            'window_start' => $bounds['start'],
+            'window_end' => $bounds['end'],
+            'window_label' => todoer_period_window_label($listType, $periodKey),
+            'window_open' => todoer_period_window_is_open($listType, $periodKey),
             // While running: no adding/editing/deleting -- just the shared list, ticked off as
             // tasks get done, whoever they were handed to.
             'running' => $running,
@@ -96,42 +102,6 @@ if ($method === 'GET') {
             'items' => $items,
             'board' => $board,
         ];
-    }
-
-    // Weekly/monthly tasks don't get a visible list of their own -- they fold into Daily instead,
-    // gated by Daily's own Start/Stop (the only game switch that's still visible): while Daily is
-    // running, a weekly/monthly task shows there only inside its own time window and while it
-    // isn't done yet; while Daily is stopped, every not-done weekly/monthly task in the group
-    // shows regardless of window or who it's assigned to.
-    $dailyRunning = $tasks['daily']['running'];
-    $now = time();
-    $folded = [];
-    foreach (['weekly', 'monthly'] as $foldedType) {
-        foreach ($tasks[$foldedType]['board'] as $row) {
-            if ($row['status'] === 'done') {
-                continue;
-            }
-            if ($dailyRunning) {
-                $afterStart = empty($row['window_start']) || strtotime($row['window_start']) <= $now;
-                $beforeEnd = empty($row['window_end']) || strtotime($row['window_end']) >= $now;
-                if (!$afterStart || !$beforeEnd) {
-                    continue;
-                }
-            }
-            // Whether it can actually be claimed/ticked still follows that task's *own* list's
-            // Start/Stop -- api/tasks.php's 'complete' action enforces that server-side -- so the
-            // checkbox rendered here has to agree with it rather than with Daily's own state.
-            $folded[] = todoer_annotate_task_for_user($row, (int) $user['id'], $tasks[$foldedType]['running']);
-        }
-    }
-    if ($folded) {
-        if ($dailyRunning) {
-            $settled = array_values(array_filter($tasks['daily']['items'], fn($t) => in_array($t['status'], ['done', 'expired'], true)));
-            $live = array_values(array_filter($tasks['daily']['items'], fn($t) => !in_array($t['status'], ['done', 'expired'], true)));
-            $tasks['daily']['items'] = array_merge($live, todoer_sort_tasks_for_view($folded), $settled);
-        } else {
-            $tasks['daily']['items'] = array_merge($tasks['daily']['items'], $folded);
-        }
     }
 
     todoer_respond([
@@ -142,6 +112,8 @@ if ($method === 'GET') {
             'id' => $groupId,
             'name' => $group['name'],
             'role' => $group['role'],
+            // Drives whether the Start/Stop button is rendered at all; the API enforces it too.
+            'is_admin' => $group['role'] === 'admin',
             'member_count' => count($allUsers),
         ],
         'notifications' => todoer_user_notifications($pdo, (int) $user['id']),
@@ -211,6 +183,11 @@ if ($method === 'POST') {
         if ($windowStart !== null && $windowEnd !== null && $windowStart > $windowEnd) {
             todoer_fail('Window start must be before window end.');
         }
+        // Anything left blank inherits the period's own window (06:30 on the first day to 23:59 on
+        // the last), so every task carries a concrete window and the list's opening and closing
+        // times apply even when nobody set one.
+        ['start' => $windowStart, 'end' => $windowEnd] =
+            todoer_task_window($listType, $periodKey, $windowStart, $windowEnd);
 
         $stmt = $pdo->prepare(
             "INSERT INTO tasks
@@ -231,21 +208,19 @@ if ($method === 'POST') {
         todoer_respond(['ok' => true, 'id' => $taskId]);
     }
 
-    if ($action === 'start') {
+    if ($action === 'start' || $action === 'stop') {
         $listType = $body['list_type'] ?? '';
         if (!in_array($listType, TODOER_LIST_TYPES, true)) {
             todoer_fail('Invalid list type.');
         }
-        $result = todoer_start_game($pdo, $groupId, $listType);
-        todoer_respond(array_merge(['ok' => true], $result));
-    }
-
-    if ($action === 'stop') {
-        $listType = $body['list_type'] ?? '';
-        if (!in_array($listType, TODOER_LIST_TYPES, true)) {
-            todoer_fail('Invalid list type.');
+        // Starting deals out everyone's tasks and stopping unlocks editing for the whole group, so
+        // both belong to the admin. Enforced here, not just hidden in the UI.
+        if (!todoer_is_group_admin($pdo, $groupId, (int) $user['id'])) {
+            todoer_fail('Only the group admin can start or stop a list.', 403);
         }
-        $result = todoer_stop_game($pdo, $groupId, $listType);
+        $result = $action === 'start'
+            ? todoer_start_game($pdo, $groupId, $listType)
+            : todoer_stop_game($pdo, $groupId, $listType);
         todoer_respond(array_merge(['ok' => true], $result));
     }
 
@@ -263,6 +238,12 @@ if ($method === 'POST') {
         $isMine = (int) $task['user_id'] === (int) $user['id'];
 
         if ($action === 'complete') {
+            // The period's play window applies to everyone, holder included: nothing can be ticked
+            // off before the list opens (06:30) or after it closes (23:59 on the last day).
+            [$windowOpen, $windowReason] = todoer_task_window_open($task);
+            if (!$windowOpen) {
+                todoer_fail(todoer_claim_error_message($windowReason), 403);
+            }
             $claimedFrom = null;
             if (!$isMine) {
                 if (!todoer_is_game_running($pdo, $groupId, $task['list_type'], $task['period_key'])) {
@@ -376,6 +357,8 @@ if ($method === 'POST') {
         if ($windowStart !== null && $windowEnd !== null && $windowStart > $windowEnd) {
             todoer_fail('Window start must be before window end.');
         }
+        ['start' => $windowStart, 'end' => $windowEnd] =
+            todoer_task_window($task['list_type'], $periodKey, $windowStart, $windowEnd);
 
         $assignmentChanged = $assignedType !== $task['assigned_type']
             || (int) $assignedUserId !== (int) $task['assigned_user_id'];

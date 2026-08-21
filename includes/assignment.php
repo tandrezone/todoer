@@ -293,6 +293,14 @@ function todoer_process_expirations(PDO $pdo): void {
             continue;
         }
 
+        // The window has closed (normally the period's own 23:59): nobody can do this task any
+        // more, so it's missed. Handing it on would just bounce it between players every sweep,
+        // since a fresh holder can't beat a deadline that's already gone.
+        if (!empty($task['window_end']) && strtotime($task['window_end']) <= $now) {
+            todoer_mark_expired($pdo, $task, 'window closed before it was done');
+            continue;
+        }
+
         // Reassignment candidates come from the task's own group only: a missed task moves
         // sideways within the group or expires, it never escapes into another group.
         $groupId = (int) $task['group_id'];
@@ -388,6 +396,28 @@ function todoer_maybe_finish_period_early(PDO $pdo, int $groupId, string $listTy
 }
 
 /**
+ * Whether a task can be worked on at this moment: its window has opened and hasn't closed. Every
+ * task has a window -- if none was typed, it inherited its period's 06:30..23:59 (see
+ * todoer_task_window()) -- so this is what makes "the day starts at 06:30 and closes at 23:59"
+ * true for the holder as well as for anyone trying to take the task over.
+ *
+ * Only the *window* is checked here, not the per-task countdown: a blown time_limit means the task
+ * gets handed to somebody else by the sweep, not that the current holder is frozen out mid-tick.
+ *
+ * Returns [open, reason] with reason 'not_open_yet' or 'window_closed'.
+ */
+function todoer_task_window_open(array $task, ?int $now = null): array {
+    $now = $now ?? time();
+    if (!empty($task['window_start']) && strtotime($task['window_start']) > $now) {
+        return [false, 'not_open_yet'];
+    }
+    if (!empty($task['window_end']) && strtotime($task['window_end']) < $now) {
+        return [false, 'window_closed'];
+    }
+    return [true, ''];
+}
+
+/**
  * Whether $userId is allowed to do (and take credit for) a task that is currently somebody
  * else's. This is the "steal" rule of game mode: an open task in the shared pool is up for
  * grabs while its window is live, so if the person holding it hasn't checked it off, anyone in
@@ -414,9 +444,12 @@ function todoer_task_claim_state(array $task, int $userId, ?int $now = null): ar
     if ($task['assigned_type'] === 'SPECIFIC_USER') {
         return [false, 'locked'];
     }
-    if (!empty($task['window_start']) && strtotime($task['window_start']) > $now) {
-        return [false, 'not_open_yet'];
+    [$windowOpen, $windowReason] = todoer_task_window_open($task, $now);
+    if (!$windowOpen) {
+        return [false, $windowReason];
     }
+    // Past its countdown (HIGH-priority timer or per-task limit) it's on its way to somebody else
+    // via the sweep, so don't let a third person grab it in the gap.
     $deadline = todoer_task_deadline($task);
     if ($deadline !== null && strtotime($deadline) <= $now) {
         return [false, 'window_closed'];
