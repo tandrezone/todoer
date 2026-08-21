@@ -1,5 +1,5 @@
-data/*.sqlite
-data/*
-.env
-data/todoer.sqlite
-data/todoer.sqlite
+/vendor/
+/data/*
+!/data/.gitkeep
+.DS_Store
+*.log

@@ -1,0 +1,20 @@
+# Apache: send everything that is not an existing file straight to the front controller.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>
+
+# The service worker must be allowed to control the whole app scope, not just /assets.
+<FilesMatch "service-worker\.js$">
+    <IfModule mod_headers.c>
+        Header set Service-Worker-Allowed "/"
+        Header set Cache-Control "no-cache"
+    </IfModule>
+</FilesMatch>
