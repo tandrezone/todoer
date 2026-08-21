@@ -196,6 +196,67 @@ $check('the new task is waiting to be assigned', $payload['tasks']['daily']['una
 $check('a HIGH priority task ignores the submitted per-task timer',
     $payload['tasks']['daily']['board'][0]['time_limit_minutes'] === null);
 
+// --- 3b. Times per period: one list, occurrences split into equal windows ---------------------
+// (Run here, while daily is still stopped -- adding is refused once a list is running, and this
+// section leaves the board exactly as it found it before the list starts below.)
+$section('Tasks: "times per period" splits the window into occurrences');
+
+$response = $post('/api/tasks', ['action' => 'add', 'list_type' => 'daily', 'title' => 'Stretch break', 'times_per_period' => 3]);
+$check('adding a 3x/day task succeeds', ($json($response)['id'] ?? 0) > 0);
+
+$boardRows = static fn(array $payload): array => array_values(array_filter(
+    $payload['tasks']['daily']['board'],
+    static fn(array $row): bool => $row['title'] === 'Stretch break'
+));
+$occurrences = $boardRows($json($get('/api/tasks')));
+$check('it creates 3 separate rows, not 1', count($occurrences) === 3, 'got ' . count($occurrences));
+
+usort($occurrences, static fn(array $a, array $b): int => strcmp((string) $a['window_start'], (string) $b['window_start']));
+$check('each occurrence got its own, non-overlapping window',
+    $occurrences[0]['window_start'] !== null
+    && $occurrences[0]['window_end'] === $occurrences[1]['window_start']
+    && $occurrences[1]['window_end'] === $occurrences[2]['window_start']);
+$check('occurrence_index/occurrence_count are numbered correctly',
+    [$occurrences[0]['occurrence_index'], $occurrences[1]['occurrence_index'], $occurrences[2]['occurrence_index']] === [1, 2, 3]
+    && $occurrences[0]['occurrence_count'] === 3 && $occurrences[2]['occurrence_count'] === 3);
+$check('every occurrence earns the list\'s normal points, same as any other daily task',
+    $occurrences[0]['points'] === 1 && $occurrences[1]['points'] === 1 && $occurrences[2]['points'] === 1);
+
+$response = $post('/api/tasks', [
+    'action' => 'edit',
+    'task_id' => $occurrences[0]['id'],
+    'title' => 'Stretch break',
+    'assigned_type' => 'ANY_USER',
+    'priority' => 'MODERATE',
+    'times_per_period' => 5,
+    'occurrence_index' => 2,
+]);
+$check('editing one occurrence\'s slot/count is accepted', ($json($response)['ok'] ?? false) === true);
+$edited = $boardRows($json($get('/api/tasks')));
+$editedRow = current(array_filter($edited, static fn(array $r): bool => $r['id'] === $occurrences[0]['id']));
+$check('the edited row now reports occurrence 2 of 5', $editedRow !== false
+    && $editedRow['occurrence_index'] === 2 && $editedRow['occurrence_count'] === 5);
+$check('editing one occurrence did not touch the sibling rows',
+    count($boardRows($json($get('/api/tasks')))) === 3);
+
+$plainAddResponse = $post('/api/tasks', ['action' => 'add', 'list_type' => 'daily', 'title' => 'Plain add-back-compat check']);
+$plainAddId = $json($plainAddResponse)['id'] ?? 0;
+$plainAddRow = current(array_filter(
+    $json($get('/api/tasks'))['tasks']['daily']['board'],
+    static fn(array $r): bool => $r['id'] === $plainAddId
+));
+$check('a plain add (no times_per_period) still defaults to a single, window-less task',
+    $plainAddRow !== false && $plainAddRow['window_start'] === null && $plainAddRow['window_end'] === null
+    && $plainAddRow['occurrence_index'] === 1 && $plainAddRow['occurrence_count'] === 1);
+
+// Clean up everything this section added (by id, not position) so the board is back to just the
+// one pre-existing task the rest of the suite (starting the list below) assumes.
+foreach (array_merge(array_column($occurrences, 'id'), [$plainAddId]) as $idToRemove) {
+    $post('/api/tasks', ['action' => 'delete', 'task_id' => $idToRemove]);
+}
+$remaining = count($json($get('/api/tasks'))['tasks']['daily']['board']);
+$check('the board is back down to just the original task', $remaining === 1, "got $remaining");
+
 $response = $post('/api/tasks', ['action' => 'start', 'list_type' => 'daily']);
 $started = $json($response);
 $check('starting the list distributes it', ($started['started'] ?? false) === true && ($started['open_assigned'] ?? 0) === 1);

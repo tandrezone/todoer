@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority TEXT NOT NULL DEFAULT 'MODERATE' CHECK (priority IN ('HIGH','MODERATE','LOW')),
     time_limit_minutes INTEGER,      -- minutes allowed once assigned; HIGH priority ignores this and always
                                       -- uses the shorter dynamic HIGH-priority limit instead (see assignment.php)
+    occurrence_index INTEGER NOT NULL DEFAULT 1,  -- which 1/occurrence_count slice of the period this row is (1-based)
+    occurrence_count INTEGER NOT NULL DEFAULT 1,  -- "times per period": the period was split into this many equal
+                                      -- windows when the task was created/edited (see App\Domain\Period\Period)
     assigned_at TEXT,                 -- when the *current* holder received it; resets on every (re)assignment
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     completed_at TEXT

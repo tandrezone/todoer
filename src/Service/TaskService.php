@@ -61,13 +61,23 @@ final class TaskService
             );
         }
 
-        $taskId = $this->tasks->insert($draft, $groupId, $user->id);
+        // "Times per period" splits the task's window (or, left blank, the whole period) into that
+        // many equal, back-to-back slices and creates one row per slice -- each occurrence is then
+        // live, claimable and scored on its own, exactly like any other task, just for its own
+        // 1/N of the period. A plain count of 1 (the default) is a single slice: today's behaviour,
+        // unchanged, including a task with no window at all staying window-less.
+        $firstTaskId = null;
+        foreach ($period->divideIntoWindows($draft->occurrenceCount, $draft->windowStart, $draft->windowEnd) as $index => $window) {
+            $occurrenceDraft = $draft->withWindow($window['start'], $window['end'], $index + 1);
+            $taskId = $this->tasks->insert($occurrenceDraft, $groupId, $user->id);
+            $firstTaskId ??= $taskId;
 
-        // If this period's game is already under way, don't strand the new task as unassigned until
-        // the next manual Start.
-        $this->assignment->assignNewTaskIfRunning($taskId, $groupId);
+            // If this period's game is already under way, don't strand the new task as unassigned
+            // until the next manual Start.
+            $this->assignment->assignNewTaskIfRunning($taskId, $groupId);
+        }
 
-        return $taskId;
+        return $firstTaskId;
     }
 
     public function edit(User $user, GroupMembership $membership, InputBag $input): void
@@ -82,7 +92,8 @@ final class TaskService
         }
 
         // The task keeps its own period: editing a task never moves it to today's list.
-        $draft = $this->drafts->fromInput($input, $task->period());
+        $period = $task->period();
+        $draft = $this->drafts->fromInput($input, $period);
         if ($draft->assignedUserId !== null) {
             $this->groups->requireMember(
                 $groupId,
@@ -90,6 +101,14 @@ final class TaskService
                 'Choose someone from your group to lock this task to.'
             );
         }
+
+        // This row is *one* occurrence out of $draft->occurrenceCount -- recompute its own slice
+        // of the window rather than regenerating the whole family, since editing never creates or
+        // removes sibling rows (see App\Service\TaskDraftFactory).
+        $windows = $period->divideIntoWindows($draft->occurrenceCount, $draft->windowStart, $draft->windowEnd);
+        $occurrenceIndex = max(1, min(count($windows), $draft->occurrenceIndex));
+        $window = $windows[$occurrenceIndex - 1];
+        $draft = $draft->withWindow($window['start'], $window['end'], $occurrenceIndex);
 
         if ($draft->changesAssignment($task)) {
             $this->tasks->updateWithAssignmentReset($task->id, $draft);

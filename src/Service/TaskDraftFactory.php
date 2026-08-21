@@ -26,12 +26,22 @@ use App\Http\Input\InputBag;
  */
 final class TaskDraftFactory
 {
+    /** A sane ceiling on "how many times per period" -- enough for any real chore, not enough to flood a list. */
+    public const MAX_TIMES_PER_PERIOD = 24;
+
     /**
      * Builds a draft for a given list period.
      *
      * The window fields are named per list type because each list captures its window in the grain
      * that fits its cadence -- a time of day for a daily task, a weekday for a weekly one, a day of
      * the month for a monthly one -- rather than a full date that would just repeat the period.
+     *
+     * `times_per_period` is how many equal occurrences that window (or, if left blank, the whole
+     * period) is divided into -- see App\Domain\Period\Period::divideIntoWindows(). It defaults to
+     * 1, the ordinary single-window task, so this is opt-in and never changes existing behaviour.
+     * `occurrence_index` only matters when *editing* one row out of an existing N: it says which
+     * slice this particular row should become; on add it is ignored, since App\Service\TaskService
+     * generates one row per slice itself.
      */
     public function fromInput(InputBag $input, Period $period): TaskDraft
     {
@@ -71,6 +81,9 @@ final class TaskDraftFactory
             throw new ValidationException('Window start must be before window end.');
         }
 
+        $occurrenceCount = max(1, min(self::MAX_TIMES_PER_PERIOD, $input->int('times_per_period', 1)));
+        $occurrenceIndex = max(1, min($occurrenceCount, $input->int('occurrence_index', 1)));
+
         return new TaskDraft(
             $period->listType,
             $period,
@@ -80,7 +93,9 @@ final class TaskDraftFactory
             $priority,
             $timeLimitMinutes,
             $windowStart,
-            $windowEnd
+            $windowEnd,
+            $occurrenceCount,
+            $occurrenceIndex
         );
     }
 }
